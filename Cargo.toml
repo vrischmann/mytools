@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "gitjuggling",
+    "git-stacked",
+]
+resolver = "2"
