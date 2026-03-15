@@ -1,6 +1,6 @@
 # mytools
 
-A multi-binary Rust workspace containing git-related utilities.
+A multi-binary Rust workspace containing utilities.
 
 ## Structure
 
@@ -8,6 +8,7 @@ This is a Cargo workspace with the following members:
 
 - **gitjuggling** - Run a git command in all repositories under the current working directory
 - **git-stacked** - Tool for managing stacked git branches
+- **cargo-target-clean** - Tool to find and clean Rust Cargo target directories
 
 ## Building
 
@@ -51,3 +52,7 @@ See [gitjuggling/README.md](gitjuggling/README.md) for more details.
 ### git-stacked
 
 See [git-stacked/README.md](git-stacked/README.md) for more details.
+
+### cargo-target-clean
+
+See [cargo-target-clean/README.md](cargo-target-clean/README.md) for more details.
