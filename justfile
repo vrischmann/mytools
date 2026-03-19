@@ -16,8 +16,18 @@ test-all:
 clean:
     @cargo clean
 
+# Install all workspace binaries
+install-all:
+    @echo "Installing gitjuggling..."
+    @cargo install --path gitjuggling
+    @echo "Installing git-stacked..."
+    @cargo install --path git-stacked
+    @echo "Installing cargo-target-clean..."
+    @cargo install --path cargo-target-clean
+
 # Show available modules
 list-modules:
     @echo "Available modules:"
     @echo "  - gitjuggling"
     @echo "  - git-stacked"
+    @echo "  - cargo-target-clean"
