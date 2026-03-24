@@ -1,58 +1,114 @@
 # mytools
 
-A multi-binary Rust workspace containing utilities.
+A multi-binary Rust workspace containing personal utility tools.
 
-## Structure
+## Tools
 
-This is a Cargo workspace with the following members:
-
-- **gitjuggling** - Run a git command in all repositories under the current working directory
-- **git-stacked** - Tool for managing stacked git branches
-- **cargo-target-clean** - Tool to find and clean Rust Cargo target directories
+| Tool | Description |
+|------|-------------|
+| **gitjuggling** | Run a git command in all repositories under the current working directory |
+| **git-stacked** | Visualize stacked git branches and their relationships |
+| **cargo-target-clean** | Interactively find and clean Cargo target directories to free disk space |
+| **git-journal** | Summarize git commits for journal entries across work and personal repos |
 
 ## Building
 
-To build all binaries:
-
 ```bash
+# Build all binaries (release mode)
 cargo build --release
-```
 
-The binaries will be available in `target/release/`:
-- `target/release/gitjuggling`
-- `target/release/git-stacked`
-
-## Development
-
-To build in debug mode:
-
-```bash
+# Build in debug mode
 cargo build --workspace
 ```
 
-To run tests:
+Binaries are output to `target/release/`.
+
+## Development
 
 ```bash
+# Run tests
 cargo test --workspace
+
+# Run clippy
+cargo clippy --workspace -- -D warnings
+
+# Run a specific binary
+cargo run --release -p <package> -- <args>
 ```
 
-To run a specific binary:
+## Installation
 
 ```bash
-cargo run --release -p gitjuggling -- <args>
-cargo run --release -p git-stacked -- <args>
+# Install all binaries to ~/.cargo/bin/
+just install-all
+
+# Or install individually
+cargo install --path gitjuggling
+cargo install --path git-stacked
+cargo install --path cargo-target-clean
+cargo install --path git-journal
 ```
 
-## Individual Projects
+## Tool Details
 
 ### gitjuggling
+
+Run git commands across multiple repositories in parallel.
+
+```bash
+# Fetch all repos under current directory
+gitjuggling fetch --all -p
+
+# With verbose output
+gitjuggling -v pull
+
+# Control depth and concurrency
+gitjuggling -d 5 -c 4 status
+```
 
 See [gitjuggling/README.md](gitjuggling/README.md) for more details.
 
 ### git-stacked
 
+Visualize stacked branch hierarchies to manage feature branch dependencies.
+
+```bash
+cd /path/to/repo
+git-stacked
+```
+
 See [git-stacked/README.md](git-stacked/README.md) for more details.
 
 ### cargo-target-clean
 
+Find and remove Cargo build artifacts interactively using fzf.
+
+```bash
+# Scan default directory ($HOME/dev)
+cargo-target-clean
+
+# Scan a custom directory
+cargo-target-clean --base-dir /path/to/projects
+```
+
 See [cargo-target-clean/README.md](cargo-target-clean/README.md) for more details.
+
+### git-journal
+
+Generate journal entries from git commits.
+
+```bash
+# Today's commits
+git-journal
+
+# Specific date
+git-journal --date 2026-03-24
+
+# Date range
+git-journal --date "2026-03-20..2026-03-24"
+
+# Plain format
+git-journal --format plain
+```
+
+See [git-journal/README.md](git-journal/README.md) for more details.
