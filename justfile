@@ -24,6 +24,8 @@ install-all:
     @cargo install --path git-stacked
     @echo "Installing cargo-target-clean..."
     @cargo install --path cargo-target-clean
+    @echo "Installing git-journal..."
+    @cargo install --path git-journal
 
 # Show available modules
 list-modules:
@@ -31,3 +33,4 @@ list-modules:
     @echo "  - gitjuggling"
     @echo "  - git-stacked"
     @echo "  - cargo-target-clean"
+    @echo "  - git-journal"
