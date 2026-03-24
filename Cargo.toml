@@ -3,5 +3,6 @@ members = [
     "gitjuggling",
     "git-stacked",
     "cargo-target-clean",
+    "git-journal",
 ]
 resolver = "2"
