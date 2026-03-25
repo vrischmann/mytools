@@ -3,7 +3,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use walkdir::WalkDir as WalkDirSync;
+use jwalk::WalkDir;
 
 /// Tool to find and clean Rust Cargo target directories
 #[derive(Parser, Debug)]
@@ -197,11 +197,12 @@ fn main() -> Result<()> {
 }
 
 fn find_target_dirs(base_dir: &Path) -> Result<Vec<TargetDir>> {
-    // Collect all target directories using walkdir
-    let target_paths: Vec<PathBuf> = WalkDirSync::new(base_dir)
+    // Collect all target directories using jwalk
+    let target_paths: Vec<PathBuf> = WalkDir::new(base_dir)
+        .skip_hidden(false)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name() == "target" && e.file_type().is_dir())
+        .filter(|e| e.file_name().to_str() == Some("target") && e.file_type().is_dir())
         .map(|e| e.path().to_path_buf())
         .collect();
 
@@ -241,7 +242,7 @@ fn find_target_dirs(base_dir: &Path) -> Result<Vec<TargetDir>> {
 fn calculate_dir_size(path: &Path) -> Result<u64> {
     let mut total_size = 0u64;
 
-    for entry in WalkDirSync::new(path).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(path).skip_hidden(false).into_iter().filter_map(|e| e.ok()) {
         if let Ok(metadata) = std::fs::metadata(entry.path()) {
             total_size += metadata.len();
         }
