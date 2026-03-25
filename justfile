@@ -26,6 +26,8 @@ install-all:
     @cargo install --path cargo-target-clean
     @echo "Installing git-journal..."
     @cargo install --path git-journal
+    @echo "Installing zoekt-reindex..."
+    @cargo install --path zoekt-reindex
 
 # Show available modules
 list-modules:
@@ -34,3 +36,4 @@ list-modules:
     @echo "  - git-stacked"
     @echo "  - cargo-target-clean"
     @echo "  - git-journal"
+    @echo "  - zoekt-reindex"
