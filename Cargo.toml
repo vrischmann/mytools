@@ -4,5 +4,6 @@ members = [
     "git-stacked",
     "cargo-target-clean",
     "git-journal",
+    "zoekt-reindex",
 ]
 resolver = "2"
