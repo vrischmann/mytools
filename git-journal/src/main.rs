@@ -222,7 +222,7 @@ fn format_journal_by_date(
     let mut current = start_date;
     while current <= end_date {
         all_dates.push(current);
-        current = current + chrono::Duration::days(1);
+        current += chrono::Duration::days(1);
     }
 
     // Output commits grouped by day (most recent first)
