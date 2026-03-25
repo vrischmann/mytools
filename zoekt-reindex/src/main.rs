@@ -3,7 +3,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::process::Command;
-use walkdir::WalkDir;
+use jwalk::WalkDir;
 
 #[derive(Parser)]
 #[command(about = "Reindex git repositories for zoekt source code search")]
@@ -41,9 +41,10 @@ fn expand_tilde(path: &str) -> PathBuf {
 fn get_repositories_paths(codebase: &PathBuf, depth: usize) -> Vec<PathBuf> {
     WalkDir::new(codebase)
         .max_depth(depth)
+        .skip_hidden(false)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().file_name() == Some(std::ffi::OsStr::new(".git")) && e.path().is_dir())
+        .filter(|e| e.file_name().to_str() == Some(".git") && e.file_type().is_dir())
         .filter_map(|e| e.path().parent().map(|p| p.to_path_buf()))
         .collect()
 }

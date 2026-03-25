@@ -7,5 +7,5 @@ description = "Reindex git repositories for zoekt source code search"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-walkdir = "2"
+jwalk = "0.8"
 rayon = "1.10"
