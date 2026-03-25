@@ -1,10 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use jwalk::WalkDir;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use walkdir::WalkDir as WalkDirSync;
 
 /// Tool to find and clean Rust Cargo target directories
 #[derive(Parser, Debug)]
@@ -13,6 +12,10 @@ struct Args {
     /// Base directory to search for cargo projects (default: $HOME/dev)
     #[arg(short, long)]
     base_dir: Option<PathBuf>,
+
+    /// Dry run: only scan and print results, don't prompt for deletion
+    #[arg(short, long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -28,8 +31,7 @@ fn main() -> Result<()> {
     let base_dir = match args.base_dir {
         Some(dir) => dir,
         None => {
-            let home = std::env::var("HOME")
-                .context("HOME environment variable not set")?;
+            let home = std::env::var("HOME").context("HOME environment variable not set")?;
             PathBuf::from(home).join("dev")
         }
     };
@@ -41,12 +43,36 @@ fn main() -> Result<()> {
         ));
     }
 
-    println!("Scanning '{}' for cargo target directories...", base_dir.display());
+    println!(
+        "Scanning '{}' for cargo target directories...",
+        base_dir.display()
+    );
 
     let target_dirs = find_target_dirs(&base_dir)?;
 
     if target_dirs.is_empty() {
         println!("No cargo target directories found.");
+        return Ok(());
+    }
+
+    // Calculate total size
+    let total_size: u64 = target_dirs.iter().map(|t| t.size).sum();
+
+    // Dry run mode: print results and exit
+    if args.dry_run {
+        println!(
+            "\nFound {} directories ({}):",
+            target_dirs.len(),
+            format_size(total_size)
+        );
+        for dir in &target_dirs {
+            println!(
+                "  {} ({} - {})",
+                dir.path.display(),
+                dir.project_name,
+                format_size(dir.size)
+            );
+        }
         return Ok(());
     }
 
@@ -64,11 +90,16 @@ fn main() -> Result<()> {
     let mut child = Command::new("fzf")
         .args([
             "-m",
-            "--delimiter", "\t",
-            "--with-nth", "1,2,3",
-            "--tabstop", "1",
-            "--header", "Select target directories to remove (TAB to multi-select, ESC to cancel)",
-            "--prompt", "> ",
+            "--delimiter",
+            "\t",
+            "--with-nth",
+            "1,2,3",
+            "--tabstop",
+            "1",
+            "--header",
+            "Select target directories to remove (TAB to multi-select, ESC to cancel)",
+            "--prompt",
+            "> ",
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -123,9 +154,18 @@ fn main() -> Result<()> {
     // Calculate total size
     let total_size: u64 = selected_dirs.iter().map(|t| t.size).sum();
 
-    println!("\nSelected {} directories ({}):", selected_dirs.len(), format_size(total_size));
+    println!(
+        "\nSelected {} directories ({}):",
+        selected_dirs.len(),
+        format_size(total_size)
+    );
     for dir in &selected_dirs {
-        println!("  - {} ({} - {})", dir.path.display(), dir.project_name, format_size(dir.size));
+        println!(
+            "  - {} ({} - {})",
+            dir.path.display(),
+            dir.project_name,
+            format_size(dir.size)
+        );
     }
 
     // Confirm deletion
@@ -142,13 +182,13 @@ fn main() -> Result<()> {
 
     // Remove all selected directories
     for dir in &selected_dirs {
-        remove_dir_all::remove_dir_all(&dir.path).with_context(|| {
-            format!(
-                "Failed to remove directory '{}'",
-                dir.path.display()
-            )
-        })?;
-        println!("Deleted '{}' ({})", dir.path.display(), format_size(dir.size));
+        remove_dir_all::remove_dir_all(&dir.path)
+            .with_context(|| format!("Failed to remove directory '{}'", dir.path.display()))?;
+        println!(
+            "Deleted '{}' ({})",
+            dir.path.display(),
+            format_size(dir.size)
+        );
     }
 
     println!("\nFreed up {}", format_size(total_size));
@@ -157,18 +197,12 @@ fn main() -> Result<()> {
 }
 
 fn find_target_dirs(base_dir: &Path) -> Result<Vec<TargetDir>> {
-    let base_dir = Arc::new(base_dir.to_path_buf());
-
-    // Collect all target directories using jwalk
-    let target_paths: Vec<PathBuf> = WalkDir::new(base_dir.as_ref())
-        .parallelism(jwalk::Parallelism::RayonNewPool(num_cpus::get()))
-        .skip_hidden(false)
+    // Collect all target directories using walkdir
+    let target_paths: Vec<PathBuf> = WalkDirSync::new(base_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name() == "target" && e.file_type().is_dir()
-        })
-        .map(|e| e.path())
+        .filter(|e| e.file_name() == "target" && e.file_type().is_dir())
+        .map(|e| e.path().to_path_buf())
         .collect();
 
     // Process in parallel with rayon
@@ -207,11 +241,7 @@ fn find_target_dirs(base_dir: &Path) -> Result<Vec<TargetDir>> {
 fn calculate_dir_size(path: &Path) -> Result<u64> {
     let mut total_size = 0u64;
 
-    for entry in WalkDir::new(path)
-        .skip_hidden(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDirSync::new(path).into_iter().filter_map(|e| e.ok()) {
         if let Ok(metadata) = std::fs::metadata(entry.path()) {
             total_size += metadata.len();
         }
