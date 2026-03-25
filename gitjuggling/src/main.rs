@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 use std::time::Instant;
-use walkdir::WalkDir;
+use jwalk::WalkDir;
 
 mod gitmodules;
 
@@ -70,13 +70,13 @@ fn is_submodule(path: &Path, gitmodules: Option<&GitModules>) -> bool {
 fn get_repositories_paths(depth: usize) -> anyhow::Result<Vec<PathBuf>> {
     let mut repositories_paths = Vec::<PathBuf>::new();
 
-    let walker = WalkDir::new(".").max_depth(depth);
+    let walker = WalkDir::new(".").max_depth(depth).skip_hidden(false);
 
     let mut gitmodules: Option<GitModules> = None;
 
     for entry in walker {
         let entry = entry?;
-        let entry_path = entry.into_path();
+        let entry_path = entry.path();
 
         let mut path = match entry_path.canonicalize() {
             Err(err) => match err.kind() {
