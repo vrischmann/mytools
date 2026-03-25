@@ -59,9 +59,9 @@ fn print_ascii_tree_recursive(
 // Retrieves all local branches in the repository and returns their names and OIDs.
 fn get_branches(repo: &Repository) -> Result<Vec<BranchInfo>, Error> {
     let mut branches: Vec<BranchInfo> = Vec::new();
-    let mut branch_iter = repo.branches(Some(BranchType::Local))?;
+    let branch_iter = repo.branches(Some(BranchType::Local))?;
 
-    while let Some(branch_result) = branch_iter.next() {
+    for branch_result in branch_iter {
         let (branch, _) = branch_result?;
 
         if let (Some(name_ref), Some(target_oid)) = (branch.name()?, branch.get().target()) {
@@ -108,24 +108,24 @@ fn get_parent_of_relationships(
                     if current_best_parent_name.is_none() {
                         current_best_parent_name = Some(potential_parent_name.clone());
                         current_best_parent_oid = Some(potential_parent_oid);
-                    } else if let Some(cbp_oid) = current_best_parent_oid {
-                        if cbp_oid != potential_parent_oid {
-                            // Ensure we are looking at a different commit
-                            match repo.merge_base(cbp_oid, potential_parent_oid) {
-                                Ok(base_between_parents_oid)
-                                    if base_between_parents_oid == cbp_oid =>
-                                {
-                                    // cbp_oid is an ancestor of potential_parent_oid.
-                                    // This means potential_parent is a "more recent" or "closer"
-                                    // ancestor to the child branch, so we update our best choice.
-                                    current_best_parent_name = Some(potential_parent_name.clone());
-                                    current_best_parent_oid = Some(potential_parent_oid);
-                                }
-                                Err(e) if e.code() == ErrorCode::NotFound => { /* No common base, not ordered */
-                                }
-                                Err(e) => return Err(Error::Git2(e)),
-                                _ => {}
+                    } else if let Some(cbp_oid) = current_best_parent_oid
+                        && cbp_oid != potential_parent_oid
+                    {
+                        // Ensure we are looking at a different commit
+                        match repo.merge_base(cbp_oid, potential_parent_oid) {
+                            Ok(base_between_parents_oid)
+                                if base_between_parents_oid == cbp_oid =>
+                            {
+                                // cbp_oid is an ancestor of potential_parent_oid.
+                                // This means potential_parent is a "more recent" or "closer"
+                                // ancestor to the child branch, so we update our best choice.
+                                current_best_parent_name = Some(potential_parent_name.clone());
+                                current_best_parent_oid = Some(potential_parent_oid);
                             }
+                            Err(e) if e.code() == ErrorCode::NotFound => { /* No common base, not ordered */
+                            }
+                            Err(e) => return Err(Error::Git2(e)),
+                            _ => {}
                         }
                     }
                 }
@@ -219,7 +219,7 @@ fn print_tree(
                 };
                 println!("{}", display_name);
                 // children_map for this branch would be empty or not exist
-                print_ascii_tree_recursive(&bi.name, &children_map, "");
+                print_ascii_tree_recursive(&bi.name, children_map, "");
             }
         }
         return Ok(());
@@ -235,7 +235,7 @@ fn print_tree(
             )
         };
         println!("{}", display_name);
-        print_ascii_tree_recursive(root_branch_name, &children_map, "");
+        print_ascii_tree_recursive(root_branch_name, children_map, "");
     }
 
     Ok(())
