@@ -10,6 +10,7 @@ A multi-binary Rust workspace containing personal utility tools.
 | **git-stacked** | Visualize stacked git branches and their relationships |
 | **cargo-target-clean** | Interactively find and clean Cargo target directories to free disk space |
 | **git-journal** | Summarize git commits for journal entries across work and personal repos |
+| **zoekt-reindex** | Reindex git repositories for zoekt source code search |
 
 ## Building
 
@@ -47,6 +48,7 @@ cargo install --path gitjuggling
 cargo install --path git-stacked
 cargo install --path cargo-target-clean
 cargo install --path git-journal
+cargo install --path zoekt-reindex
 ```
 
 ## Tool Details
@@ -112,3 +114,27 @@ git-journal --format plain
 ```
 
 See [git-journal/README.md](git-journal/README.md) for more details.
+
+### zoekt-reindex
+
+Reindex git repositories for [zoekt](https://github.com/sourcegraph/zoekt) source code search.
+
+```bash
+# Reindex with defaults (reads config from ~/.config/zoekt-reindex/config.toml)
+zoekt-reindex
+
+# Specify options on the command line
+zoekt-reindex --codebase ~/dev --index-dir ~/.zoekt --depth 3
+
+# Control concurrency
+zoekt-reindex --concurrency 4
+```
+
+Configuration file (`~/.config/zoekt-reindex/config.toml`):
+```toml
+zoekt_bin = "~/go/bin/zoekt-git-index"
+index_dir = "~/.zoekt"
+codebase = "~/dev/Batch"
+depth = 3
+concurrency = 2
+```

@@ -27,7 +27,7 @@ cargo test --workspace
 cargo run --release -p <package> -- <args>
 ```
 
-Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`.
+Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`.
 
 ## Code Style
 
@@ -40,9 +40,9 @@ Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`,
 Each crate has its own `Cargo.toml` with independent dependencies. Common dependencies across crates:
 - `clap` - CLI argument parsing
 - `anyhow` - Error handling
-- `git2` - Git operations
-- `rayon` - Parallel processing
-- `jwalk` - Parallel directory walking
+- `git2` - Git operations (git-stacked, git-journal)
+- `rayon` - Parallel processing (gitjuggling, cargo-target-clean, zoekt-reindex)
+- `jwalk` - Parallel directory walking (gitjuggling, cargo-target-clean, git-journal, zoekt-reindex)
 
 ## Tool-Specific Notes
 
@@ -65,3 +65,9 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 - Hardcoded paths: `~/dev/Batch` (work), `~/dev/perso` (personal)
 - Default author filter: `vincent@rischmann.fr`
 - Uses `chrono` for date handling
+
+### zoekt-reindex
+- Requires `zoekt-git-index` binary (from zoekt sourcegraph project)
+- Config file: `~/.config/zoekt-reindex/config.toml`
+- Uses `jwalk` and `rayon` for parallel repository discovery and indexing
+- CLI args override config file settings
