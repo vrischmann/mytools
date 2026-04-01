@@ -51,12 +51,9 @@ fn run() -> Result<()> {
     let key = cli.r#type.as_key();
 
     // 1. Try to retrieve from the secure backend.
-    match backend::get(key)? {
-        Some(secret) => {
-            print!("{secret}");
-            return Ok(());
-        }
-        None => {}
+    if let Some(secret) = backend::get(key)? {
+        print!("{secret}");
+        return Ok(());
     }
 
     // 2. Not cached — prompt the user.
@@ -71,7 +68,8 @@ fn run() -> Result<()> {
 }
 
 fn main() {
-    if run().is_err() {
+    if let Err(e) = run() {
+        eprintln!("error: {e:#}");
         std::process::exit(1);
     }
 }

@@ -1,5 +1,4 @@
-use anyhow::{bail, Result};
-use rpassword::prompt_password_from_tty;
+use anyhow::{bail, Context, Result};
 
 /// Prompt the user for a password via `/dev/tty`, ensuring it never echoes
 /// to the terminal and is independent of any stdin redirection.
@@ -7,7 +6,8 @@ use rpassword::prompt_password_from_tty;
 /// Returns an error if the prompt fails or the user enters an empty string
 /// (interpreted as cancellation).
 pub fn prompt_password(msg: &str) -> Result<String> {
-    let password = prompt_password_from_tty(msg)?;
+    let password = rpassword::prompt_password(msg)
+        .context("failed to read password from tty")?;
     if password.is_empty() {
         bail!("user cancelled password prompt (empty input)");
     }
