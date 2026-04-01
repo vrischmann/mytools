@@ -28,6 +28,8 @@ install-all:
     @cargo install --path git-journal
     @echo "Installing zoekt-reindex..."
     @cargo install --path zoekt-reindex
+    @echo "Installing ansible-password-agent..."
+    @cargo install --path ansible-password-agent
 
 # Show available modules
 list-modules:
@@ -37,3 +39,4 @@ list-modules:
     @echo "  - cargo-target-clean"
     @echo "  - git-journal"
     @echo "  - zoekt-reindex"
+    @echo "  - ansible-password-agent"

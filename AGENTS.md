@@ -27,7 +27,7 @@ cargo test --workspace
 cargo run --release -p <package> -- <args>
 ```
 
-Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`.
+Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
 
 ## Code Style
 
@@ -71,3 +71,11 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 - Config file: `~/.config/zoekt-reindex/config.toml`
 - Uses `jwalk` and `rayon` for parallel repository discovery and indexing
 - CLI args override config file settings
+
+### ansible-password-agent
+- Secure credential provider for Ansible vault and become passwords
+- Never writes cleartext to disk
+- Linux: uses kernel keyring via `linux-keyutils` (600s timeout)
+- macOS: uses Keychain via `security-framework` with biometric access control
+- CLI: `--type vault|become` (default: vault)
+- Reads passwords from `/dev/tty` via `rpassword` (immune to stdin redirects)
