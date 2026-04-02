@@ -10,15 +10,23 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.package }} for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - package: zoekt-reindex
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
+          - package: zoekt-reindex
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - package: ansible-password-agent
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - package: ansible-password-agent
+            os: macos-latest
             target: aarch64-apple-darwin
 
     steps:
@@ -33,26 +41,35 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build zoekt-reindex
-        run: cargo build --release --locked -p zoekt-reindex --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p ${{ matrix.package }} --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package
         shell: bash
         run: |
           set -euo pipefail
-
-          archive="zoekt-reindex-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          pkg="${{ matrix.package }}"
+          version="${GITHUB_REF_NAME#v}"
+          target="${{ matrix.target }}"
+          archive="${pkg}-${version}-${target}.tar.gz"
           mkdir -p dist
 
-          cp "target/${{ matrix.target }}/release/zoekt-reindex" dist/
-          cp README.md dist/
+          cp "target/${target}/release/${pkg}" dist/
+
+          # Include extra assets per package.
+          case "$pkg" in
+            ansible-password-agent)
+              cp ansible-password-agent/assets/fish/vendor_conf.d/ansible-password-agent.fish dist/
+              ;;
+          esac
+
           tar -C dist -czf "$archive" .
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.package }}-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
           if-no-files-found: error
 
