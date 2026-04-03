@@ -1,38 +1,20 @@
 # ansible-password-agent fish integration
 #
-# Creates a per-shell kernel session keyring when inside a directory tree
-# containing an .ansible-keyring marker file. This isolates cached passwords
-# to the current shell and its children.
+# Provides the `init-ansible-password-agent` function which starts a new fish
+# shell inside an isolated kernel session keyring named "ansible_vault".
+# This ensures cached vault/become passwords are scoped to that shell and
+# its children, and are automatically destroyed when the shell exits.
 #
-# When leaving the directory, a new session keyring is created to invalidate
-# any cached passwords. When the shell exits, the kernel destroys the keyring.
+# Usage:
+#   init-ansible-password-agent
+#
+# This replaces the previous approach of using `keyctl new_session` inside a
+# PWD event handler, which is not permitted on modern Fedora kernels.
 
-set -g __ansible_keyring_active 0
-
-function __ansible_keyring_check --on-variable PWD
-    # Walk up from $PWD looking for .ansible-keyring marker file.
-    set -l dir $PWD
-    set -l found 0
-    while test "$dir" != "/"
-        if test -f "$dir/.ansible-keyring"
-            set found 1
-            break
-        end
-        set dir (dirname "$dir")
+function apa
+    if not command -q keyctl
+        echo "apa: keyctl not found" >&2
+        return 1
     end
-
-    if test $found -eq 1
-        if test $__ansible_keyring_active -eq 0
-            keyctl new_session >/dev/null 2>&1
-            set -g __ansible_keyring_active 1
-        end
-    else
-        if test $__ansible_keyring_active -eq 1
-            keyctl new_session >/dev/null 2>&1
-            set -g __ansible_keyring_active 0
-        end
-    end
+    exec keyctl session ansible_password_agent fish
 end
-
-# Initial check in case fish starts inside a marked directory.
-__ansible_keyring_check

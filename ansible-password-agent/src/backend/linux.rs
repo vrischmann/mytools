@@ -9,6 +9,10 @@ const KEY_TIMEOUT_SECS: usize = 600;
 /// Key description prefix used in the kernel keyring.
 const KEY_PREFIX: &str = "ansible-password-agent:";
 
+/// Expected session keyring description when running inside
+/// `keyctl session ansible_password_agent`.
+const SESSION_KEYRING_NAME: &str = "ansible_password_agent";
+
 /// Linux backend using the Kernel Key Retention Service via the process session keyring.
 ///
 /// Passwords are stored in unswappable kernel memory and automatically expire
@@ -59,11 +63,34 @@ impl PasswordBackend for LinuxBackend {
 
 /// Return the process session keyring.
 ///
-/// Requires that a session keyring already exists for the process (e.g. set
-/// up by PAM during login). Returns an error otherwise.
+/// Requires that a session keyring already exists for the process and that
+/// it was created by `keyctl session ansible_vault`. Returns an error otherwise.
 fn session_keyring() -> Result<KeyRing> {
-    KeyRing::from_special_id(KeyRingIdentifier::Session, false)
-        .map_err(|e| anyhow::anyhow!("failed to open session keyring: {e}"))
+    let ring = KeyRing::from_special_id(KeyRingIdentifier::Session, false)
+        .map_err(|e| anyhow::anyhow!("failed to open session keyring: {e}"))?;
+
+    ensure_vault_session(&ring)?;
+
+    Ok(ring)
+}
+
+/// Verify that the current session keyring is the isolated vault session.
+///
+/// This prevents passwords from being stored in the user's default session
+/// keyring, which would be accessible to unrelated processes.
+fn ensure_vault_session(ring: &KeyRing) -> Result<()> {
+    let metadata = ring
+        .metadata()
+        .map_err(|e| anyhow::anyhow!("failed to read session keyring metadata: {e}"))?;
+
+    if metadata.get_description() != SESSION_KEYRING_NAME {
+        anyhow::bail!(
+            "not running inside an ansible_password_agent session keyring; \n\
+             please start a new shell with: apa"
+        );
+    }
+
+    Ok(())
 }
 
 /// Build the kernel keyring description from the logical key name.
