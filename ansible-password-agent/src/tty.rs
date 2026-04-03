@@ -6,8 +6,7 @@ use anyhow::{bail, Context, Result};
 /// Returns an error if the prompt fails or the user enters an empty string
 /// (interpreted as cancellation).
 pub fn prompt_password(msg: &str) -> Result<String> {
-    let password = rpassword::prompt_password(msg)
-        .context("failed to read password from tty")?;
+    let password = rpassword::prompt_password(msg).context("failed to read password from tty")?;
     if password.is_empty() {
         bail!("user cancelled password prompt (empty input)");
     }
