@@ -80,7 +80,10 @@ fn get_date_range(date: NaiveDate) -> (DateTime<Local>, DateTime<Local>) {
     (since, until)
 }
 
-fn get_date_range_from_bounds(start: NaiveDate, end: NaiveDate) -> (DateTime<Local>, DateTime<Local>) {
+fn get_date_range_from_bounds(
+    start: NaiveDate,
+    end: NaiveDate,
+) -> (DateTime<Local>, DateTime<Local>) {
     let since = Local
         .with_ymd_and_hms(start.year(), start.month(), start.day(), 0, 0, 0)
         .single()
@@ -168,22 +171,16 @@ fn get_commits(
         }
 
         // Extract the commit date
-        let commit_date = Local.timestamp_opt(commit_time, 0)
+        let commit_date = Local
+            .timestamp_opt(commit_time, 0)
             .single()
             .map(|dt| dt.date_naive())
             .unwrap_or_else(|| Local::now().date_naive());
 
         let sha = oid.to_string();
-        let short_sha = if sha.len() >= 7 {
-            &sha[..7]
-        } else {
-            &sha
-        };
+        let short_sha = if sha.len() >= 7 { &sha[..7] } else { &sha };
 
-        let message = commit
-            .summary()
-            .unwrap_or("")
-            .to_string();
+        let message = commit.summary().unwrap_or("").to_string();
 
         commits.push(Commit {
             repo: repo_name.clone(),
@@ -264,10 +261,16 @@ fn format_plain(work_commits: &[Commit], personal_commits: &[Commit]) -> String 
     let mut by_date: BTreeMap<NaiveDate, Vec<(String, &Commit)>> = BTreeMap::new();
 
     for c in work_commits {
-        by_date.entry(c.date).or_default().push(("work".to_string(), c));
+        by_date
+            .entry(c.date)
+            .or_default()
+            .push(("work".to_string(), c));
     }
     for c in personal_commits {
-        by_date.entry(c.date).or_default().push(("personal".to_string(), c));
+        by_date
+            .entry(c.date)
+            .or_default()
+            .push(("personal".to_string(), c));
     }
 
     for (date, commits) in by_date.iter().rev() {
@@ -285,40 +288,64 @@ fn main() {
     let config = Config::default();
 
     // Determine the date range to use
-    let (since, until, start_date, end_date, date_label): (DateTime<Local>, DateTime<Local>, NaiveDate, NaiveDate, String) =
-        if let Some(since_str) = args.since {
-            // Use explicit since/until range
-            let start_date = parse_date(&since_str);
-            let end_date = args.until.map(|u| parse_date(&u)).unwrap_or_else(|| Local::now().date_naive());
-            let (since_dt, until_dt) = get_date_range_from_bounds(start_date, end_date);
-            let label = if start_date == end_date {
-                format!("{}", start_date.format("%Y-%m-%d"))
-            } else {
-                format!("{} to {}", start_date.format("%Y-%m-%d"), end_date.format("%Y-%m-%d"))
-            };
-            (since_dt, until_dt, start_date, end_date, label)
-        } else if let Some(date_str) = args.date {
-            // Check if it's a date range (contains "..")
-            if let Some((start, end)) = parse_date_range(&date_str) {
-                let (since_dt, until_dt) = get_date_range_from_bounds(start, end);
-                let label = if start == end {
-                    format!("{}", start.format("%Y-%m-%d"))
-                } else {
-                    format!("{} to {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"))
-                };
-                (since_dt, until_dt, start, end, label)
-            } else {
-                // Single date
-                let target_date = parse_date(&date_str);
-                let (since_dt, until_dt) = get_date_range(target_date);
-                (since_dt, until_dt, target_date, target_date, format!("{}", target_date.format("%Y-%m-%d")))
-            }
+    let (since, until, start_date, end_date, date_label): (
+        DateTime<Local>,
+        DateTime<Local>,
+        NaiveDate,
+        NaiveDate,
+        String,
+    ) = if let Some(since_str) = args.since {
+        // Use explicit since/until range
+        let start_date = parse_date(&since_str);
+        let end_date = args
+            .until
+            .map(|u| parse_date(&u))
+            .unwrap_or_else(|| Local::now().date_naive());
+        let (since_dt, until_dt) = get_date_range_from_bounds(start_date, end_date);
+        let label = if start_date == end_date {
+            format!("{}", start_date.format("%Y-%m-%d"))
         } else {
-            // Default to today
-            let target_date = Local::now().date_naive();
-            let (since_dt, until_dt) = get_date_range(target_date);
-            (since_dt, until_dt, target_date, target_date, format!("{}", target_date.format("%Y-%m-%d")))
+            format!(
+                "{} to {}",
+                start_date.format("%Y-%m-%d"),
+                end_date.format("%Y-%m-%d")
+            )
         };
+        (since_dt, until_dt, start_date, end_date, label)
+    } else if let Some(date_str) = args.date {
+        // Check if it's a date range (contains "..")
+        if let Some((start, end)) = parse_date_range(&date_str) {
+            let (since_dt, until_dt) = get_date_range_from_bounds(start, end);
+            let label = if start == end {
+                format!("{}", start.format("%Y-%m-%d"))
+            } else {
+                format!("{} to {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"))
+            };
+            (since_dt, until_dt, start, end, label)
+        } else {
+            // Single date
+            let target_date = parse_date(&date_str);
+            let (since_dt, until_dt) = get_date_range(target_date);
+            (
+                since_dt,
+                until_dt,
+                target_date,
+                target_date,
+                format!("{}", target_date.format("%Y-%m-%d")),
+            )
+        }
+    } else {
+        // Default to today
+        let target_date = Local::now().date_naive();
+        let (since_dt, until_dt) = get_date_range(target_date);
+        (
+            since_dt,
+            until_dt,
+            target_date,
+            target_date,
+            format!("{}", target_date.format("%Y-%m-%d")),
+        )
+    };
 
     let mut work_commits = Vec::new();
     let mut personal_commits = Vec::new();
@@ -336,11 +363,7 @@ fn main() {
     }
 
     if work_commits.is_empty() && personal_commits.is_empty() {
-        println!(
-            "No commits found for {} on {}",
-            args.author,
-            date_label
-        );
+        println!("No commits found for {} on {}", args.author, date_label);
         return;
     }
 

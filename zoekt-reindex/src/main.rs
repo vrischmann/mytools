@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use directories::ProjectDirs;
+use jwalk::WalkDir;
 use rayon::prelude::*;
 use serde::Deserialize;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::fs;
-use jwalk::WalkDir;
 
 #[derive(Parser)]
 #[command(about = "Reindex git repositories for zoekt source code search")]
@@ -101,11 +101,17 @@ impl Config {
     /// Merge CLI args into config (CLI takes precedence)
     fn merge_with_args(self, args: Args) -> MergedConfig {
         MergedConfig {
-            zoekt_bin: args.zoekt_bin.or(self.zoekt_bin)
+            zoekt_bin: args
+                .zoekt_bin
+                .or(self.zoekt_bin)
                 .unwrap_or_else(|| "~/go/bin/zoekt-git-index".to_string()),
-            index_dir: args.index_dir.or(self.index_dir)
+            index_dir: args
+                .index_dir
+                .or(self.index_dir)
                 .unwrap_or_else(|| "~/.zoekt".to_string()),
-            codebase: args.codebase.or(self.codebase)
+            codebase: args
+                .codebase
+                .or(self.codebase)
                 .unwrap_or_else(|| "~/dev/Batch".to_string()),
             depth: args.depth.or(self.depth).unwrap_or(3),
             concurrency: args.concurrency.or(self.concurrency).unwrap_or(2),

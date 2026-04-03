@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use colored::Colorize;
 use gitmodules::GitModules;
 use indicatif::{ProgressBar, ProgressStyle};
+use jwalk::WalkDir;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{self, Read};
@@ -11,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 use std::time::Instant;
-use jwalk::WalkDir;
 
 mod gitmodules;
 

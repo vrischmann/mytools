@@ -18,8 +18,8 @@ impl PasswordBackend for MacOSBackend {
 
         match passwords::generic_password(options) {
             Ok(bytes) => {
-                let secret = String::from_utf8(bytes)
-                    .context("keychain payload is not valid UTF-8")?;
+                let secret =
+                    String::from_utf8(bytes).context("keychain payload is not valid UTF-8")?;
                 Ok(Some(secret))
             }
             Err(e) => {
@@ -40,8 +40,7 @@ impl PasswordBackend for MacOSBackend {
     }
 
     fn set(key: &str, secret: &str) -> Result<()> {
-        let mut options =
-            PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, key);
+        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, key);
 
         // Require biometric (Touch ID / Face ID) or device password.
         options.set_access_control_options(AccessControlOptions::USER_PRESENCE);

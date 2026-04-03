@@ -113,9 +113,7 @@ fn get_parent_of_relationships(
                     {
                         // Ensure we are looking at a different commit
                         match repo.merge_base(cbp_oid, potential_parent_oid) {
-                            Ok(base_between_parents_oid)
-                                if base_between_parents_oid == cbp_oid =>
-                            {
+                            Ok(base_between_parents_oid) if base_between_parents_oid == cbp_oid => {
                                 // cbp_oid is an ancestor of potential_parent_oid.
                                 // This means potential_parent is a "more recent" or "closer"
                                 // ancestor to the child branch, so we update our best choice.

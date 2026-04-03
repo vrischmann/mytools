@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use jwalk::WalkDir;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use jwalk::WalkDir;
 
 /// Tool to find and clean Rust Cargo target directories
 #[derive(Parser, Debug)]
@@ -242,7 +242,11 @@ fn find_target_dirs(base_dir: &Path) -> Result<Vec<TargetDir>> {
 fn calculate_dir_size(path: &Path) -> Result<u64> {
     let mut total_size = 0u64;
 
-    for entry in WalkDir::new(path).skip_hidden(false).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(path)
+        .skip_hidden(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if let Ok(metadata) = std::fs::metadata(entry.path()) {
             total_size += metadata.len();
         }
