@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Error as IoError;
 use std::path::{Path, PathBuf};
 
-use onlyerror::Error;
+// Simple error type replacing onlyerror
 
 #[derive(Debug)]
 pub struct GitSubmodule {
@@ -40,14 +40,36 @@ impl GitModules {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 enum ParseError {
-    #[error("i/o error: {0}")]
-    IO(#[from] IoError),
-    #[error("invalid file: {0}")]
+    IO(IoError),
     InvalidFile(String),
-    #[error("end of file")]
     Eof,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::IO(err) => write!(f, "i/o error: {err}"),
+            ParseError::InvalidFile(msg) => write!(f, "invalid file: {msg}"),
+            ParseError::Eof => write!(f, "end of file"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ParseError::IO(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<IoError> for ParseError {
+    fn from(err: IoError) -> Self {
+        ParseError::IO(err)
+    }
 }
 
 struct GitModulesParser<'a> {
@@ -206,23 +228,23 @@ impl<'a> GitModulesParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::*;
+    use super::GitModules;
 
     #[test]
     fn test_parse_gitmodules() {
-        let contents = "
-[submodule \"foobar\"]
+        let contents = r#"
+[submodule "foobar"]
     path = foo
     url = git@github.com:foo/bar.git
-[submodule \"cpc\"]
+[submodule "cpc"]
     path = cpclol
     url = git@github.com:foo/cpc.git
 
-[submodule \"yep\"]
+[submodule "yep"]
     path = yop
     url = git@github.com:foo/yop.git
     branch = master
-    foo = bar";
+    foo = bar"#;
 
         let result = GitModules::parse(contents);
         assert!(result.is_ok());

@@ -1,58 +1,275 @@
-#![allow(clippy::uninlined_format_args)]
-
-use anyhow::anyhow;
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 use colored::Colorize;
-use gitmodules::GitModules;
 use indicatif::{ProgressBar, ProgressStyle};
-use jwalk::WalkDir;
 use rayon::prelude::*;
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod config;
+mod discover;
+mod execute;
 mod gitmodules;
+mod prune;
+mod remote;
+mod sync_plan;
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(
+    name = "gitjuggling",
+    disable_version_flag = true,
+    about = "Repository sync and git command runner"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Sync local repos with upstream GitHub/Forgejo remotes
+    Sync {
+        /// Workspace name (uses default_workspace from config if omitted)
+        workspace: Option<String>,
+
+        /// Path to config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Dry run: show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Interactive mode: prompt before destructive actions (default true)
+        #[arg(long, default_missing_value = "true", default_value = "true", num_args = 0..=1)]
+        interactive: bool,
+
+        /// Prune local repos that have no upstream match
+        #[arg(long)]
+        prune: bool,
+
+        /// Concurrency limit for parallel operations
+        #[arg(long, short('c'), default_value = "2")]
+        concurrency: usize,
+    },
+
+    /// Run a git command in all local repositories
+    Exec {
+        /// Search depth for repository discovery
+        #[arg(long, short('d'), default_value = "3")]
+        depth: usize,
+
+        /// Concurrency limit
+        #[arg(long, short('c'), default_value = "2")]
+        concurrency: usize,
+
+        /// Show output from all repositories, not just failures
+        #[arg(long, short('v'))]
+        verbose: bool,
+
+        /// Git arguments to run in each repository
+        #[arg(trailing_var_arg = true, required = true)]
+        git_args: Vec<String>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Sync {
+            workspace,
+            config,
+            dry_run,
+            interactive,
+            prune,
+            concurrency,
+        } => run_sync(
+            workspace.as_deref(),
+            config.as_deref(),
+            dry_run,
+            interactive,
+            prune,
+            concurrency,
+        ),
+        Commands::Exec {
+            depth,
+            concurrency,
+            verbose,
+            git_args,
+        } => run_exec(&depth, &concurrency, verbose, &git_args),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync command
+// ---------------------------------------------------------------------------
+
+fn run_sync(
+    workspace_name: Option<&str>,
+    config_path: Option<&Path>,
+    dry_run: bool,
+    interactive: bool,
+    do_prune: bool,
+    concurrency: usize,
+) -> Result<()> {
+    // 1. Load config
+    let config = match config_path {
+        Some(path) => config::Config::load_from(path)?,
+        None => config::Config::load_default()?,
+    };
+
+    let workspace = config.get_workspace(workspace_name)?;
+
+    println!(
+        "{}{}{}",
+        "=== ".bright_white(),
+        format!("Syncing workspace: {}", workspace_name.unwrap_or("default")).bright_cyan(),
+        " ===".bright_white()
+    );
+
+    // 2. Fetch remote repos
+    let mut github_repos = Vec::new();
+    let mut forgejo_repos = Vec::new();
+
+    if !workspace.github_owners.is_empty() {
+        println!("  {}Fetching GitHub repos...", "→ ".blue());
+        github_repos = remote::fetch_github_repos(&workspace.github_owners)?;
+        println!("  {}Found {} GitHub repos", "✓".green(), github_repos.len());
+    }
+
+    if let (Some(url), Some(user), Some(token_cmd)) = (
+        &workspace.forgejo_url,
+        &workspace.forgejo_user,
+        &workspace.forgejo_token_cmd,
+    ) {
+        println!("  {}Fetching Forgejo repos...", "→ ".blue());
+        forgejo_repos = remote::fetch_forgejo_repos(url, user, token_cmd)?;
+        println!(
+            "  {}Found {} Forgejo repos (excluding mirrors)",
+            "✓".green(),
+            forgejo_repos.len()
+        );
+    }
+
+    // 3. Deduplicate
+    remote::dedup_repos(&mut github_repos, &mut forgejo_repos);
+
+    let mut all_remote_repos = github_repos;
+    all_remote_repos.extend(forgejo_repos);
+
+    println!(
+        "  {}Total: {} remote repos after dedup",
+        "→ ".blue(),
+        all_remote_repos.len()
+    );
+
+    // 4. Discover local repos
+    println!("  {}Scanning local repos...", "→ ".blue());
+    let local = discover::LocalRepos::discover(workspace.local_scan_root())?;
+    println!("  {}Found {} local repos", "✓".green(), local.repos.len());
+
+    // 5. Build sync plan
+    let actions = sync_plan::build_plan(&all_remote_repos, &local, workspace);
+
+    let updates = actions
+        .iter()
+        .filter(|a| matches!(a, sync_plan::Action::Update { .. }))
+        .count();
+    let moves = actions
+        .iter()
+        .filter(|a| matches!(a, sync_plan::Action::Move { .. }))
+        .count();
+    let clones = actions
+        .iter()
+        .filter(|a| matches!(a, sync_plan::Action::Clone { .. }))
+        .count();
+
+    println!(
+        "\n  {} {} to update, {} to move, {} to clone",
+        "Plan:".blue(),
+        updates.to_string().bright_green(),
+        moves.to_string().yellow(),
+        clones.to_string().cyan(),
+    );
+
+    // 6. Execute actions
+    if !actions.is_empty() {
+        let opts = execute::ExecuteOptions {
+            dry_run,
+            interactive,
+            concurrency,
+        };
+        let results = execute::execute_actions(&actions, &opts);
+        execute::print_summary(&results);
+    }
+
+    // 7. Prune (optional)
+    if do_prune {
+        let orphans = prune::find_orphans(&local, &all_remote_repos);
+        if !orphans.is_empty() {
+            println!(
+                "\n  {}Found {} {}",
+                "→ ".blue(),
+                orphans.len().to_string().bright_yellow(),
+                "orphan repos".bright_yellow()
+            );
+            let results = prune::prune_orphans(&orphans, dry_run, interactive);
+            prune::print_prune_summary(&results);
+        } else {
+            println!("\n  {}", "No orphan repos found.".dimmed());
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Exec command (preserves old behavior)
+// ---------------------------------------------------------------------------
 
 struct GitOutput {
     output: std::process::Output,
 }
 
 fn do_git_command(path: &Path, args: &[&str]) -> anyhow::Result<GitOutput> {
-    match process::Command::new("git")
+    match std::process::Command::new("git")
         .args(args)
         .current_dir(path)
         .output()
     {
         Ok(output) => Ok(GitOutput { output }),
-        Err(err) => Err(anyhow!(err)),
+        Err(err) => Err(anyhow::anyhow!(err)),
     }
 }
 
-fn parse_gitmodules(path: &Path) -> anyhow::Result<GitModules> {
+fn parse_gitmodules(path: &Path) -> anyhow::Result<gitmodules::GitModules> {
     let contents = {
-        let mut file = File::open(path)?;
+        let mut file = std::fs::File::open(path)?;
         let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
+        std::io::Read::read_to_string(&mut file, &mut contents)?;
         contents
     };
 
-    let gitmodules = GitModules::parse(&contents)?;
-
+    let gitmodules = gitmodules::GitModules::parse(&contents)?;
     Ok(gitmodules)
 }
 
-fn is_submodule(path: &Path, gitmodules: Option<&GitModules>) -> bool {
+fn is_submodule(path: &Path, gitmodules: Option<&gitmodules::GitModules>) -> bool {
     match gitmodules {
         Some(gitmodules) => {
-            // If this is a submodule:
-            // * path is the git submodule directory
-            // * parent path is the parent git repository containing the gitmodules
-
-            let parent_path = match path.parent().ok_or(anyhow!("no parent path")) {
-                Ok(path) => path,
-                Err(_) => return false,
+            let parent_path = match path.parent() {
+                Some(p) => p,
+                None => return false,
             };
 
             let tmp = parent_path
@@ -68,11 +285,11 @@ fn is_submodule(path: &Path, gitmodules: Option<&GitModules>) -> bool {
 }
 
 fn get_repositories_paths(depth: usize) -> anyhow::Result<Vec<PathBuf>> {
+    use jwalk::WalkDir;
+
     let mut repositories_paths = Vec::<PathBuf>::new();
-
     let walker = WalkDir::new(".").max_depth(depth).skip_hidden(false);
-
-    let mut gitmodules: Option<GitModules> = None;
+    let mut gitmodules: Option<gitmodules::GitModules> = None;
 
     for entry in walker {
         let entry = entry?;
@@ -80,14 +297,13 @@ fn get_repositories_paths(depth: usize) -> anyhow::Result<Vec<PathBuf>> {
 
         let mut path = match entry_path.canonicalize() {
             Err(err) => match err.kind() {
-                io::ErrorKind::NotFound => continue,
-                _ => return Err(anyhow!(err)),
+                std::io::ErrorKind::NotFound => continue,
+                _ => return Err(anyhow::anyhow!(err)),
             },
             Ok(v) => v,
         };
         let path_string = path.to_string_lossy();
 
-        // Parse the gitmodules file if it exists
         let gitmodules_path = path.join(".gitmodules");
         if gitmodules_path.exists() {
             if let Ok(tmp) = parse_gitmodules(&gitmodules_path) {
@@ -95,17 +311,14 @@ fn get_repositories_paths(depth: usize) -> anyhow::Result<Vec<PathBuf>> {
             }
         }
 
-        // Ignore directories that aren't a git repository
         if !path_string.ends_with(".git") {
             continue;
         }
-        // Ignore repositories that are a submoduile
         if is_submodule(&path, gitmodules.as_ref()) {
             continue;
         }
 
         path.pop();
-
         repositories_paths.push(path);
     }
 
@@ -132,66 +345,16 @@ const STDERR_COLOR: colored::Color = colored::Color::TrueColor {
     b: 154,
 };
 
-fn main() {
-    let matches = clap::Command::new("gitjuggling")
-        .disable_version_flag(true)
-        .about("Git juggler")
-        .arg(
-            clap::Arg::new("depth")
-                .long("depth")
-                .short('d')
-                .num_args(1)
-                .value_parser(clap::value_parser!(usize)),
-        )
-        .arg(
-            clap::Arg::new("concurrency")
-                .long("concurrency")
-                .short('c')
-                .num_args(1)
-                .value_parser(clap::value_parser!(usize)),
-        )
-        .arg(
-            clap::Arg::new("verbose")
-                .long("verbose")
-                .short('v')
-                .num_args(0)
-                .help("Show output from all repositories, not just failures"),
-        )
-        .arg(
-            clap::Arg::new("git_args")
-                .num_args(1..)
-                .required(true)
-                .trailing_var_arg(true),
-        )
-        .get_matches();
-
-    let verbose = matches.get_flag("verbose");
-    let git_args: Vec<&str> = matches
-        .get_many::<String>("git_args")
-        .unwrap_or_default()
-        .map(String::as_str)
-        .collect();
-
-    // Setup rayon.
-
-    // Can't use too many threads due to SSH multiplexing
-    let concurrency = matches.get_one("concurrency").copied().unwrap_or(2);
+fn run_exec(depth: &usize, concurrency: &usize, verbose: bool, git_args: &[String]) -> Result<()> {
+    let git_args: Vec<&str> = git_args.iter().map(String::as_str).collect();
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(concurrency)
+        .num_threads(*concurrency)
         .build_global()
         .unwrap();
 
-    // Collect all local git repositories
+    let repositories_paths = get_repositories_paths(*depth)?;
 
-    let depth = matches.get_one("depth").copied().unwrap_or(3);
-
-    let repositories_paths = match get_repositories_paths(depth) {
-        Err(err) => panic!("unable to get repositories paths: {}", err),
-        Ok(v) => v,
-    };
-
-    // Setup progress bar
     let total = repositories_paths.len();
     let pb = Arc::new(ProgressBar::new(total as u64));
     pb.set_style(
@@ -252,7 +415,6 @@ fn main() {
     let elapsed = start_time.elapsed();
     let (succeeded, failed): (Vec<_>, Vec<_>) = results.into_iter().partition(|item| item.success);
 
-    // Print detailed output based on verbose flag
     if verbose {
         println!(
             "\n{}{}{}\n",
@@ -324,6 +486,8 @@ fn main() {
     );
 
     if !failed.is_empty() {
-        process::exit(1);
+        std::process::exit(1);
     }
+
+    Ok(())
 }
