@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // forgejoRepo is the JSON response struct for Forgejo API repos.
@@ -59,7 +60,7 @@ func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 		return nil, err
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second,}
 	var repos []*RemoteRepo
 	page := 1
 

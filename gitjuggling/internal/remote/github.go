@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // githubRepo is the JSON response struct for GitHub API repos.
@@ -63,7 +64,7 @@ func FetchGitHubRepos(owners []string) ([]*RemoteRepo, error) {
 // fetchAuthenticatedUserRepos paginates through /user/repos to fetch all
 // repos visible to the authenticated user (including private ones).
 func fetchAuthenticatedUserRepos(token string) ([]*RemoteRepo, error) {
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second,}
 	var repos []*RemoteRepo
 	page := 1
 
