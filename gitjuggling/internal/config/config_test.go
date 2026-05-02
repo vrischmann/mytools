@@ -46,9 +46,6 @@ workspace:
 	if ws.ForgejoToken != "" {
 		t.Errorf("expected empty ForgejoToken, got %q", ws.ForgejoToken)
 	}
-	if ws.LocalScanRootDir != "" {
-		t.Errorf("expected empty LocalScanRootDir, got %q", ws.LocalScanRootDir)
-	}
 
 	if ws.Rules.Base != "/home/user/dev/repos" {
 		t.Errorf("expected Rules.Base /home/user/dev/repos, got %q", ws.Rules.Base)
@@ -72,7 +69,6 @@ workspace:
     forgejo_url: https://git.example.com
     forgejo_user: vincent
     forgejo_token: "op://vault/item/field"
-    local_scan_root: /home/user/dev
     rules:
       base: /home/user/dev/repos
       forks: /home/user/dev/forks
@@ -158,47 +154,6 @@ workspace:
 	_, err = cfg.GetWorkspace("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing workspace")
-	}
-}
-
-func TestLocalScanRootDefault(t *testing.T) {
-	input := `
-workspace:
-  personal:
-    root: /home/user/dev
-    github_owners: [vrischmann]
-    rules:
-      base: /home/user/dev/repos
-`
-	cfg, err := parseYAML(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	ws := cfg.Workspaces["personal"]
-	if got := ws.LocalScanRoot(); got != "/home/user/dev" {
-		t.Errorf("expected LocalScanRoot /home/user/dev, got %q", got)
-	}
-}
-
-func TestLocalScanRootOverride(t *testing.T) {
-	input := `
-workspace:
-  personal:
-    root: /home/user/dev
-    local_scan_root: /home/user/dev/deeper
-    github_owners: [vrischmann]
-    rules:
-      base: /home/user/dev/repos
-`
-	cfg, err := parseYAML(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	ws := cfg.Workspaces["personal"]
-	if got := ws.LocalScanRoot(); got != "/home/user/dev/deeper" {
-		t.Errorf("expected LocalScanRoot /home/user/dev/deeper, got %q", got)
 	}
 }
 

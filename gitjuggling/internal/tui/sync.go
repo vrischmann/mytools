@@ -210,7 +210,7 @@ func (m SyncModel) fetchForgejoRepos() tea.Cmd {
 
 func (m SyncModel) scanLocalRepos() tea.Cmd {
 	return func() tea.Msg {
-		local, err := discover.Discover(m.ws.LocalScanRoot())
+		local, err := discover.Discover(m.ws.Root)
 		return syncLocalReposMsg{local: local, err: err}
 	}
 }

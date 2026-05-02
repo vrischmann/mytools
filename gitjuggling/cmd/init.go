@@ -45,13 +45,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	placeholder := struct {
 		DefaultWorkspace string `yaml:"default_workspace"`
 		Workspaces       map[string]struct {
-			Root             string   `yaml:"root"`
-			GitHubOwners     []string `yaml:"github_owners"`
-			ForgejoURL       string   `yaml:"forgejo_url,omitempty"`
-			ForgejoUser      string   `yaml:"forgejo_user,omitempty"`
-			ForgejoToken     string   `yaml:"forgejo_token,omitempty"`
-			LocalScanRootDir string   `yaml:"local_scan_root,omitempty"`
-			Rules            struct {
+			Root         string   `yaml:"root"`
+			GitHubOwners []string `yaml:"github_owners"`
+			ForgejoURL   string   `yaml:"forgejo_url,omitempty"`
+			ForgejoUser  string   `yaml:"forgejo_user,omitempty"`
+			ForgejoToken string   `yaml:"forgejo_token,omitempty"`
+			Rules        struct {
 				Base     string `yaml:"base"`
 				Forks    string `yaml:"forks,omitempty"`
 				Archived string `yaml:"archived,omitempty"`
@@ -60,13 +59,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}{
 		DefaultWorkspace: "personal",
 		Workspaces: map[string]struct {
-			Root             string   `yaml:"root"`
-			GitHubOwners     []string `yaml:"github_owners"`
-			ForgejoURL       string   `yaml:"forgejo_url,omitempty"`
-			ForgejoUser      string   `yaml:"forgejo_user,omitempty"`
-			ForgejoToken     string   `yaml:"forgejo_token,omitempty"`
-			LocalScanRootDir string   `yaml:"local_scan_root,omitempty"`
-			Rules            struct {
+			Root         string   `yaml:"root"`
+			GitHubOwners []string `yaml:"github_owners"`
+			ForgejoURL   string   `yaml:"forgejo_url,omitempty"`
+			ForgejoUser  string   `yaml:"forgejo_user,omitempty"`
+			ForgejoToken string   `yaml:"forgejo_token,omitempty"`
+			Rules        struct {
 				Base     string `yaml:"base"`
 				Forks    string `yaml:"forks,omitempty"`
 				Archived string `yaml:"archived,omitempty"`

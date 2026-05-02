@@ -23,7 +23,6 @@ type Workspace struct {
 	ForgejoURL       string   `yaml:"forgejo_url"`
 	ForgejoUser      string   `yaml:"forgejo_user"`
 	ForgejoToken     string   `yaml:"forgejo_token"`
-	LocalScanRootDir string   `yaml:"local_scan_root"`
 	Rules            Rules    `yaml:"rules"`
 }
 
@@ -80,10 +79,3 @@ func (c *Config) GetWorkspace(name string) (*Workspace, error) {
 	return ws, nil
 }
 
-// LocalScanRoot returns the local scan root, defaulting to the workspace root.
-func (w *Workspace) LocalScanRoot() string {
-	if w.LocalScanRootDir != "" {
-		return w.LocalScanRootDir
-	}
-	return w.Root
-}
