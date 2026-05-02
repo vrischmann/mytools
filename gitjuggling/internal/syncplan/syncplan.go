@@ -37,15 +37,7 @@ type Action struct {
 // If clash is true, the final path is <basedir>/<owner>-<name>.
 // Otherwise, the final path is <basedir>/<name>.
 func ClassifyRepo(repo *remote.RemoteRepo, ws *config.Workspace, clash bool) string {
-	var baseDir string
-	switch {
-	case repo.IsFork && ws.Rules.Forks != "":
-		baseDir = ws.Rules.Forks
-	case repo.IsArchived && ws.Rules.Archived != "":
-		baseDir = ws.Rules.Archived
-	default:
-		baseDir = ws.Rules.Base
-	}
+	baseDir := rulesBaseDir(repo, ws)
 
 	if clash {
 		return filepath.Join(baseDir, repo.Owner+"-"+repo.Name)
