@@ -20,11 +20,6 @@ import (
 // Messages
 // ---------------------------------------------------------------------------
 
-type syncConfigLoadedMsg struct {
-	cfg *config.Config
-	err error
-}
-
 type syncGithubReposMsg struct {
 	repos []*remote.RemoteRepo
 	err   error
@@ -84,8 +79,7 @@ type SyncModel struct {
 	concurrency int
 
 	// Config
-	cfg *config.Config
-	ws  *config.Workspace
+	ws *config.Workspace
 
 	// Loading phase
 	spinner      spinner.Model
@@ -130,7 +124,6 @@ type SyncModel struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	configPath string
 }
 
 type loadingStep struct {
@@ -139,13 +132,12 @@ type loadingStep struct {
 }
 
 // NewSyncModel creates a new sync TUI model.
-func NewSyncModel(workspace string, configPath string, dryRun, interactive, doPrune bool, concurrency int) SyncModel {
+func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune bool, concurrency int) SyncModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = SuccessStyle
 
 	steps := []loadingStep{
-		{label: "Loading config..."},
 		{label: "Fetching GitHub repos..."},
 		{label: "Fetching Forgejo repos..."},
 		{label: "Scanning local repos..."},
@@ -155,40 +147,27 @@ func NewSyncModel(workspace string, configPath string, dryRun, interactive, doPr
 
 	return SyncModel{
 		phase:        syncPhaseLoading,
-		workspace:    workspace,
+		workspace:    workspaceName,
 		dryRun:       dryRun,
 		interactive:  interactive,
 		doPrune:      doPrune,
 		concurrency:  concurrency,
+		ws:           ws,
 		spinner:      s,
 		loadingSteps: steps,
 		loadingIdx:   0,
 		ctx:          ctx,
 		cancel:       cancel,
-		configPath:   configPath,
 	}
 }
 
 func (m SyncModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.loadConfig())
+	return tea.Batch(m.spinner.Tick, m.fetchGithubRepos())
 }
 
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
-
-func (m SyncModel) loadConfig() tea.Cmd {
-	return func() tea.Msg {
-		var cfg *config.Config
-		var err error
-		if m.configPath != "" {
-			cfg, err = config.LoadFrom(m.configPath)
-		} else {
-			cfg, err = config.LoadDefault()
-		}
-		return syncConfigLoadedMsg{cfg: cfg, err: err}
-	}
-}
 
 func (m SyncModel) fetchGithubRepos() tea.Cmd {
 	return func() tea.Msg {
@@ -257,24 +236,6 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	// Loading phase messages
-	case syncConfigLoadedMsg:
-		if msg.err != nil {
-			m.loadErr = msg.err
-			m.phase = syncPhaseSummary
-			return m, tea.Quit
-		}
-		m.cfg = msg.cfg
-		ws, err := m.cfg.GetWorkspace(m.workspace)
-		if err != nil {
-			m.loadErr = err
-			m.phase = syncPhaseSummary
-			return m, tea.Quit
-		}
-		m.ws = ws
-		m.loadingSteps[0].done = true
-		m.loadingIdx = 1
-		return m, tea.Batch(m.spinner.Tick, m.fetchGithubRepos())
-
 	case syncGithubReposMsg:
 		if msg.err != nil {
 			m.loadErr = msg.err
@@ -282,8 +243,8 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.githubRepos = msg.repos
-		m.loadingSteps[1].done = true
-		m.loadingIdx = 2
+		m.loadingSteps[0].done = true
+		m.loadingIdx = 1
 		return m, tea.Batch(m.spinner.Tick, m.fetchForgejoRepos())
 
 	case syncForgejoReposMsg:
@@ -293,8 +254,8 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.forgejoRepos = msg.repos
-		m.loadingSteps[2].done = true
-		m.loadingIdx = 3
+		m.loadingSteps[1].done = true
+		m.loadingIdx = 2
 		return m, tea.Batch(m.spinner.Tick, m.scanLocalRepos())
 
 	case syncLocalReposMsg:
@@ -304,7 +265,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.localRepos = msg.local
-		m.loadingSteps[3].done = true
+		m.loadingSteps[2].done = true
 
 		// Dedup and build plan
 		githubRepos, forgejoRepos := remote.DedupRepos(m.githubRepos, m.forgejoRepos)

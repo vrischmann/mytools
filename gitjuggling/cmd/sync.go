@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -40,7 +41,24 @@ func runSync(cmd *cobra.Command, args []string) error {
 		workspaceName = args[0]
 	}
 
-	model := tui.NewSyncModel(workspaceName, syncConfigPath, syncDryRun, syncInteractive, syncPrune, syncConcurrency)
+	// Load config
+	var cfg *config.Config
+	var err error
+	if syncConfigPath != "" {
+		cfg, err = config.LoadFrom(syncConfigPath)
+	} else {
+		cfg, err = config.LoadDefault()
+	}
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	ws, err := cfg.GetWorkspace(workspaceName)
+	if err != nil {
+		return fmt.Errorf("resolving workspace: %w", err)
+	}
+
+	model := tui.NewSyncModel(workspaceName, ws, syncDryRun, syncInteractive, syncPrune, syncConcurrency)
 
 	p := tea.NewProgram(model)
 	finalModel, err := p.Run()
