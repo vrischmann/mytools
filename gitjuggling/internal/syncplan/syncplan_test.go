@@ -86,10 +86,7 @@ func TestClassifyNoForksDirFallsBackToBase(t *testing.T) {
 
 func TestBuildPlanClone(t *testing.T) {
 	ws := testWorkspace()
-	local := &discover.LocalRepos{
-		ByURL:  map[string]string{},
-		ByName: map[string][]string{},
-	}
+	local := discover.NewLocalRepos(nil)
 	repo := makeRepo("newrepo", "owner", false, false)
 
 	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
@@ -112,10 +109,9 @@ func TestBuildPlanUpdate(t *testing.T) {
 	repo := makeRepo("myrepo", "owner", false, false)
 	expected := filepath.Join("/home/user/dev/repos", "myrepo")
 
-	local := &discover.LocalRepos{
-		ByURL:  map[string]string{"github.com/owner/myrepo": expected},
-		ByName: map[string][]string{},
-	}
+	local := discover.NewLocalRepos([]discover.LocalRepo{
+		{Path: expected, RemoteURLs: map[string]string{"origin": "https://github.com/owner/myrepo.git"}},
+	})
 
 	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
 	if len(actions) != 1 {
@@ -136,10 +132,9 @@ func TestBuildPlanMove(t *testing.T) {
 	repo := makeRepo("myrepo", "owner", false, false)
 	wrongPath := "/home/user/dev/some-other-place/myrepo"
 
-	local := &discover.LocalRepos{
-		ByURL:  map[string]string{"github.com/owner/myrepo": wrongPath},
-		ByName: map[string][]string{},
-	}
+	local := discover.NewLocalRepos([]discover.LocalRepo{
+		{Path: wrongPath, RemoteURLs: map[string]string{"origin": "https://github.com/owner/myrepo.git"}},
+	})
 
 	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
 	if len(actions) != 1 {
@@ -171,14 +166,10 @@ func TestBuildPlanMoveDestinationOccupied(t *testing.T) {
 	expectedPath := filepath.Join("/home/user/dev/forks", "nvim-treesitter")
 
 	// The expected path is already occupied by a different repo
-	local := &discover.LocalRepos{
-		ByURL: map[string]string{"github.com/vrischmann/nvim-treesitter": currentPath},
-		ByPath: map[string]*discover.LocalRepo{
-			currentPath:  {Path: currentPath, RemoteURLs: map[string]string{"origin": "git@github.com:vrischmann/nvim-treesitter.git"}},
-			expectedPath: {Path: expectedPath, RemoteURLs: map[string]string{"origin": "https://github.com/nvim-treesitter/nvim-treesitter"}},
-		},
-		ByName: map[string][]string{"nvim-treesitter": {currentPath, expectedPath}},
-	}
+	local := discover.NewLocalRepos([]discover.LocalRepo{
+		{Path: currentPath, RemoteURLs: map[string]string{"origin": "git@github.com:vrischmann/nvim-treesitter.git"}},
+		{Path: expectedPath, RemoteURLs: map[string]string{"origin": "https://github.com/nvim-treesitter/nvim-treesitter"}},
+	})
 
 	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
 	if len(actions) != 1 {
@@ -209,10 +200,7 @@ func TestBuildPlanClash(t *testing.T) {
 	repo1 := makeRepo("samename", "owner1", false, false)
 	repo2 := makeRepo("samename", "owner2", false, false)
 
-	local := &discover.LocalRepos{
-		ByURL:  map[string]string{},
-		ByName: map[string][]string{},
-	}
+	local := discover.NewLocalRepos(nil)
 
 	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
 	if len(actions) != 2 {

@@ -17,29 +17,72 @@ type LocalRepo struct {
 
 // LocalRepos holds all discovered local repos with lookup indices.
 type LocalRepos struct {
-	repos  []*LocalRepo
-	ByURL  map[string]string     // normalized URL → local path
-	ByPath map[string]*LocalRepo // absolute path → LocalRepo
-	ByName map[string][]string   // dir name → list of local paths
+	repos  []LocalRepo
+	byURL  map[string]string     // normalized URL → local path
+	byPath map[string]*LocalRepo // absolute path → LocalRepo
+	byName map[string][]string   // dir name → list of local paths
+}
+
+// NewLocalRepos builds a LocalRepos from a flat list of repos,
+// constructing all lookup indices.
+func NewLocalRepos(repos []LocalRepo) *LocalRepos {
+	byURL := make(map[string]string, len(repos))
+	byPath := make(map[string]*LocalRepo, len(repos))
+	byName := make(map[string][]string)
+
+	for i := range repos {
+		r := &repos[i]
+		for _, url := range r.RemoteURLs {
+			normalized := NormalizeURL(url)
+			byURL[normalized] = r.Path
+		}
+		byPath[r.Path] = r
+		name := filepath.Base(r.Path)
+		byName[name] = append(byName[name], r.Path)
+	}
+
+	return &LocalRepos{
+		repos:  repos,
+		byURL:  byURL,
+		byPath: byPath,
+		byName: byName,
+	}
 }
 
 // Iter returns an iterator over all discovered local repos.
 func (lr *LocalRepos) Iter() iter.Seq2[int, *LocalRepo] {
 	return func(yield func(int, *LocalRepo) bool) {
-		for i, repo := range lr.repos {
-			if !yield(i, repo) {
+		for i := range lr.repos {
+			if !yield(i, &lr.repos[i]) {
 				return
 			}
 		}
 	}
 }
 
+// FindByURL looks up a local repo by matching against clone URLs.
+// It tries both the normalized URL and the raw URL.
+func (lr *LocalRepos) FindByURL(url string) (string, bool) {
+	normalized := NormalizeURL(url)
+	if p, ok := lr.byURL[normalized]; ok {
+		return p, true
+	}
+	if p, ok := lr.byURL[url]; ok {
+		return p, true
+	}
+	return "", false
+}
+
+// FindByPath looks up a local repo by its absolute path.
+func (lr *LocalRepos) FindByPath(path string) (*LocalRepo, bool) {
+	r, ok := lr.byPath[path]
+	return r, ok
+}
+
 // Discover walks the filesystem under root, finding git repos by looking for
 // .git directories. For each repo it reads the origin remote URL.
 func Discover(root string) (*LocalRepos, error) {
-	var repos []*LocalRepo
-	byURL := make(map[string]string)
-	byName := make(map[string][]string)
+	var repos []LocalRepo
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -62,18 +105,9 @@ func Discover(root string) (*LocalRepos, error) {
 			return nil
 		}
 
-		normalized := NormalizeURL(originURL)
-		byURL[normalized] = repoPath
-
-		remoteURLs := map[string]string{"origin": originURL}
-
-		// Index by directory name
-		name := filepath.Base(repoPath)
-		byName[name] = append(byName[name], repoPath)
-
-		repos = append(repos, &LocalRepo{
+		repos = append(repos, LocalRepo{
 			Path:       repoPath,
-			RemoteURLs: remoteURLs,
+			RemoteURLs: map[string]string{"origin": originURL},
 		})
 
 		return nil
@@ -82,30 +116,7 @@ func Discover(root string) (*LocalRepos, error) {
 		return nil, fmt.Errorf("walking %s: %w", root, err)
 	}
 
-	byPath := make(map[string]*LocalRepo, len(repos))
-	for _, r := range repos {
-		byPath[r.Path] = r
-	}
-
-	return &LocalRepos{
-		repos:  repos,
-		ByURL:  byURL,
-		ByPath: byPath,
-		ByName: byName,
-	}, nil
-}
-
-// FindByURL looks up a local repo by matching against clone URLs.
-// It tries both the normalized URL and the raw URL.
-func (lr *LocalRepos) FindByURL(url string) (string, bool) {
-	normalized := NormalizeURL(url)
-	if p, ok := lr.ByURL[normalized]; ok {
-		return p, true
-	}
-	if p, ok := lr.ByURL[url]; ok {
-		return p, true
-	}
-	return "", false
+	return NewLocalRepos(repos), nil
 }
 
 // getRemoteURL returns the URL of a git remote by running git remote get-url.
