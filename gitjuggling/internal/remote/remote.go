@@ -161,6 +161,27 @@ type forgejoRepo struct {
 	} `json:"owner"`
 }
 
+// httpsToSSH converts an HTTPS git URL to SSH format.
+//
+// Examples:
+//
+//	https://git.example.com/user/project.git → git@git.example.com:user/project.git
+//	https://git.example.com/user/project      → git@git.example.com:user/project.git
+func httpsToSSH(url string) string {
+	url = strings.TrimRight(url, "/")
+
+	if after, ok := strings.CutPrefix(url, "https://"); ok {
+		after = strings.TrimSuffix(after, ".git")
+		host, path, ok := strings.Cut(after, "/")
+		if !ok {
+			return url // can't parse, return as-is
+		}
+		return "git@" + host + ":" + path + ".git"
+	}
+
+	return url // not HTTPS, return as-is
+}
+
 // ForgejoToken retrieves a Forgejo token by reading the given 1Password secret reference.
 // The secretRef should be an "op://..." URI; this function hardcodes "op read" to execute it.
 func ForgejoToken(secretRef string) (string, error) {
@@ -224,7 +245,7 @@ func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 				IsFork:     r.Fork,
 				IsArchived: r.Archived,
 				IsMirror:   r.Mirror,
-				CloneURL:   r.CloneURL,
+				CloneURL:   httpsToSSH(r.CloneURL),
 				Source:     SourceForgejo,
 			})
 		}
