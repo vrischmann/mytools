@@ -44,14 +44,16 @@ func Discover(root string) (*LocalRepos, error) {
 		repoPath := filepath.Dir(path)
 
 		// Read origin remote URL
-		originURL, _ := getRemoteURL(repoPath, "origin")
-
-		remoteURLs := make(map[string]string)
-		if originURL != "" {
-			normalized := NormalizeURL(originURL)
-			byURL[normalized] = repoPath
-			remoteURLs["origin"] = originURL
+		originURL, err := getRemoteURL(repoPath, "origin")
+		if err != nil {
+			// Skip repos without an origin remote (e.g. bare init, no remotes configured)
+			return nil
 		}
+
+		normalized := NormalizeURL(originURL)
+		byURL[normalized] = repoPath
+
+		remoteURLs := map[string]string{"origin": originURL}
 
 		// Index by directory name
 		name := filepath.Base(repoPath)
