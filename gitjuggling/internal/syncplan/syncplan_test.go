@@ -36,8 +36,8 @@ func makeRepo(name, owner string, isFork, isArchived bool) *remote.RemoteRepo {
 func TestClassifyBaseRepo(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, false)
-	got := ClassifyRepo(repo, ws)
-	want := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	got := ClassifyRepo(repo, ws, false)
+	want := filepath.Join("/home/user/dev/repos", "myrepo")
 	if got != want {
 		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
 	}
@@ -46,8 +46,8 @@ func TestClassifyBaseRepo(t *testing.T) {
 func TestClassifyFork(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", true, false)
-	got := ClassifyRepo(repo, ws)
-	want := filepath.Join("/home/user/dev/forks", "owner", "myrepo")
+	got := ClassifyRepo(repo, ws, false)
+	want := filepath.Join("/home/user/dev/forks", "myrepo")
 	if got != want {
 		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
 	}
@@ -56,8 +56,8 @@ func TestClassifyFork(t *testing.T) {
 func TestClassifyArchived(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, true)
-	got := ClassifyRepo(repo, ws)
-	want := filepath.Join("/home/user/dev/archived", "owner", "myrepo")
+	got := ClassifyRepo(repo, ws, false)
+	want := filepath.Join("/home/user/dev/archived", "myrepo")
 	if got != want {
 		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
 	}
@@ -66,8 +66,8 @@ func TestClassifyArchived(t *testing.T) {
 func TestClassifyForkTakesPriorityOverArchived(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", true, true)
-	got := ClassifyRepo(repo, ws)
-	want := filepath.Join("/home/user/dev/forks", "owner", "myrepo")
+	got := ClassifyRepo(repo, ws, false)
+	want := filepath.Join("/home/user/dev/forks", "myrepo")
 	if got != want {
 		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
 	}
@@ -77,8 +77,8 @@ func TestClassifyNoForksDirFallsBackToBase(t *testing.T) {
 	ws := testWorkspace()
 	ws.Rules.Forks = ""
 	repo := makeRepo("myrepo", "owner", true, false)
-	got := ClassifyRepo(repo, ws)
-	want := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	got := ClassifyRepo(repo, ws, false)
+	want := filepath.Join("/home/user/dev/repos", "myrepo")
 	if got != want {
 		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
 	}
@@ -101,7 +101,7 @@ func TestBuildPlanClone(t *testing.T) {
 		t.Errorf("expected ActionClone, got %d", actions[0].Type)
 	}
 
-	expected := filepath.Join("/home/user/dev/repos", "owner", "newrepo")
+	expected := filepath.Join("/home/user/dev/repos", "newrepo")
 	if actions[0].ExpectedPath != expected {
 		t.Errorf("expected path %q, got %q", expected, actions[0].ExpectedPath)
 	}
@@ -110,7 +110,7 @@ func TestBuildPlanClone(t *testing.T) {
 func TestBuildPlanUpdate(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, false)
-	expected := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	expected := filepath.Join("/home/user/dev/repos", "myrepo")
 
 	local := &discover.LocalRepos{
 		ByURL:  map[string]string{"github.com/owner/myrepo": expected},
@@ -134,7 +134,7 @@ func TestBuildPlanUpdate(t *testing.T) {
 func TestBuildPlanMove(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, false)
-	wrongPath := "/home/user/dev/some-other-place/owner/myrepo"
+	wrongPath := "/home/user/dev/some-other-place/myrepo"
 
 	local := &discover.LocalRepos{
 		ByURL:  map[string]string{"github.com/owner/myrepo": wrongPath},
@@ -154,8 +154,46 @@ func TestBuildPlanMove(t *testing.T) {
 		t.Errorf("expected CurrentPath %q, got %q", wrongPath, actions[0].CurrentPath)
 	}
 
-	expected := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	expected := filepath.Join("/home/user/dev/repos", "myrepo")
 	if actions[0].ExpectedPath != expected {
 		t.Errorf("expected ExpectedPath %q, got %q", expected, actions[0].ExpectedPath)
+	}
+}
+
+func TestClassifyClash(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, false)
+	got := ClassifyRepo(repo, ws, true)
+	want := filepath.Join("/home/user/dev/repos", "owner-myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() clash = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanClash(t *testing.T) {
+	ws := testWorkspace()
+	repo1 := makeRepo("samename", "owner1", false, false)
+	repo2 := makeRepo("samename", "owner2", false, false)
+
+	local := &discover.LocalRepos{
+		ByURL:  map[string]string{},
+		ByName: map[string][]string{},
+	}
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+
+	expected1 := filepath.Join("/home/user/dev/repos", "owner1-samename")
+	expected2 := filepath.Join("/home/user/dev/repos", "owner2-samename")
+
+	for _, a := range actions {
+		if a.Type != ActionClone {
+			t.Errorf("expected ActionClone, got %d", a.Type)
+		}
+		if a.ExpectedPath != expected1 && a.ExpectedPath != expected2 {
+			t.Errorf("unexpected ExpectedPath %q", a.ExpectedPath)
+		}
 	}
 }

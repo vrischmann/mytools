@@ -34,8 +34,9 @@ type Action struct {
 //  2. is_archived → rules.Archived (if configured)
 //  3. default → rules.Base
 //
-// Final path: <basedir>/<owner>/<name>
-func ClassifyRepo(repo *remote.RemoteRepo, ws *config.Workspace) string {
+// If clash is true, the final path is <basedir>/<owner>-<name>.
+// Otherwise, the final path is <basedir>/<name>.
+func ClassifyRepo(repo *remote.RemoteRepo, ws *config.Workspace, clash bool) string {
 	var baseDir string
 	switch {
 	case repo.IsFork && ws.Rules.Forks != "":
@@ -46,16 +47,45 @@ func ClassifyRepo(repo *remote.RemoteRepo, ws *config.Workspace) string {
 		baseDir = ws.Rules.Base
 	}
 
-	return filepath.Join(baseDir, repo.Owner, repo.Name)
+	if clash {
+		return filepath.Join(baseDir, repo.Owner+"-"+repo.Name)
+	}
+	return filepath.Join(baseDir, repo.Name)
+}
+
+// rulesBaseDir returns the base directory for a repo based on workspace rules.
+func rulesBaseDir(repo *remote.RemoteRepo, ws *config.Workspace) string {
+	switch {
+	case repo.IsFork && ws.Rules.Forks != "":
+		return ws.Rules.Forks
+	case repo.IsArchived && ws.Rules.Archived != "":
+		return ws.Rules.Archived
+	default:
+		return ws.Rules.Base
+	}
 }
 
 // BuildPlan determines the action for each remote repo by matching against
 // locally discovered repos.
 func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws *config.Workspace) []Action {
+	// Detect name clashes: repos with the same Name+rules category
+	// share the same target directory name.
+	type nameKey struct {
+		name    string
+		baseDir string
+	}
+	nameCount := make(map[nameKey]int)
+	for _, repo := range remoteRepos {
+		baseDir := rulesBaseDir(repo, ws)
+		nameCount[nameKey{repo.Name, baseDir}]++
+	}
+
 	var actions []Action
 
 	for _, repo := range remoteRepos {
-		expectedPath := ClassifyRepo(repo, ws)
+		baseDir := rulesBaseDir(repo, ws)
+		clash := nameCount[nameKey{repo.Name, baseDir}] > 1
+		expectedPath := ClassifyRepo(repo, ws, clash)
 
 		localPath, found := local.FindByURL(repo.CloneURL)
 		switch {
