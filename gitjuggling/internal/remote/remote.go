@@ -58,34 +58,45 @@ func GitHubToken() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// FetchGitHubRepos fetches all repos for the given GitHub owners (users or orgs).
+// FetchGitHubRepos fetches all repos visible to the authenticated GitHub user,
+// then filters by the given owners. This includes private repos owned by the
+// authenticated user, which the /users/{owner}/repos endpoint would not return.
 func FetchGitHubRepos(owners []string) ([]*RemoteRepo, error) {
 	token, err := GitHubToken()
 	if err != nil {
 		return nil, err
 	}
 
-	var allRepos []*RemoteRepo
-	for _, owner := range owners {
-		repos, err := fetchGitHubOwnerRepos(token, owner)
-		if err != nil {
-			return nil, fmt.Errorf("fetching GitHub repos for %q: %w", owner, err)
-		}
-		allRepos = append(allRepos, repos...)
+	allRepos, err := fetchAuthenticatedUserRepos(token)
+	if err != nil {
+		return nil, err
 	}
-	return allRepos, nil
+
+	// Filter by configured owners
+	wantOwners := make(map[string]struct{}, len(owners))
+	for _, o := range owners {
+		wantOwners[strings.ToLower(o)] = struct{}{}
+	}
+
+	var filtered []*RemoteRepo
+	for _, r := range allRepos {
+		if _, ok := wantOwners[strings.ToLower(r.Owner)]; ok {
+			filtered = append(filtered, r)
+		}
+	}
+
+	return filtered, nil
 }
 
-// fetchGitHubOwnerRepos paginates through the GitHub API for a single owner.
-// It tries the org endpoint first, falling back to the user endpoint on 404.
-func fetchGitHubOwnerRepos(token, owner string) ([]*RemoteRepo, error) {
+// fetchAuthenticatedUserRepos paginates through /user/repos to fetch all
+// repos visible to the authenticated user (including private ones).
+func fetchAuthenticatedUserRepos(token string) ([]*RemoteRepo, error) {
 	client := &http.Client{}
 	var repos []*RemoteRepo
 	page := 1
 
 	for {
-		// Try org endpoint first
-		url := fmt.Sprintf("https://api.github.com/orgs/%s/repos?page=%d&per_page=100&type=all", owner, page)
+		url := fmt.Sprintf("https://api.github.com/user/repos?page=%d&per_page=100&affiliation=owner,collaborator,organization_member", page)
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 		if err != nil {
@@ -98,25 +109,11 @@ func fetchGitHubOwnerRepos(token, owner string) ([]*RemoteRepo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("request to GitHub API failed: %w", err)
 		}
-
-		// If 404, try user endpoint
-		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
-			url = fmt.Sprintf("https://api.github.com/users/%s/repos?page=%d&per_page=100&type=all", owner, page)
-
-			req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-			if err != nil {
-				return nil, err
-			}
-			req.Header.Set("Authorization", "Bearer "+token)
-			req.Header.Set("User-Agent", "gitjuggling")
-
-			resp, err = client.Do(req)
-			if err != nil {
-				return nil, fmt.Errorf("request to GitHub API failed: %w", err)
-			}
-		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+		}
 
 		var pageRepos []githubRepo
 		if err := json.NewDecoder(resp.Body).Decode(&pageRepos); err != nil {
