@@ -17,9 +17,9 @@ type LocalRepo struct {
 // LocalRepos holds all discovered local repos with lookup indices.
 type LocalRepos struct {
 	Repos  []*LocalRepo
-	ByURL  map[string]string    // normalized URL → local path
+	ByURL  map[string]string     // normalized URL → local path
 	ByPath map[string]*LocalRepo // absolute path → LocalRepo
-	ByName map[string][]string  // dir name → list of local paths
+	ByName map[string][]string   // dir name → list of local paths
 }
 
 // Discover walks the filesystem under root, finding git repos by looking for
@@ -109,10 +109,11 @@ func getRemoteURL(repoPath, remote string) (string, error) {
 // It handles SSH vs HTTPS differences for the same repo.
 //
 // Examples:
-//   git@github.com:owner/repo.git       → github.com/owner/repo
-//   ssh://git@github.com/owner/repo.git → github.com/owner/repo
-//   https://github.com/owner/repo.git   → github.com/owner/repo
-//   https://github.com/owner/repo       → github.com/owner/repo
+//
+//	git@github.com:owner/repo.git       → github.com/owner/repo
+//	ssh://git@github.com/owner/repo.git → github.com/owner/repo
+//	https://github.com/owner/repo.git   → github.com/owner/repo
+//	https://github.com/owner/repo       → github.com/owner/repo
 func NormalizeURL(url string) string {
 	url = strings.TrimSpace(url)
 	url = strings.TrimRight(url, "/")

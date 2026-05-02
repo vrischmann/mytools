@@ -227,6 +227,6 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 		Description: desc,
 		Path:        expectedPath,
 		Success:     true,
-			Message:     "cloned",
+		Message:     "cloned",
 	}
 }

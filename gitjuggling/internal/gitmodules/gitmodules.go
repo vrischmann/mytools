@@ -173,4 +173,3 @@ func (p *parser) peek(n int) string {
 	}
 	return p.input[:n]
 }
-

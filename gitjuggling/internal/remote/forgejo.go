@@ -60,7 +60,7 @@ func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second,}
+	client := &http.Client{Timeout: 30 * time.Second}
 	var repos []*RemoteRepo
 	page := 1
 

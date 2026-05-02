@@ -154,5 +154,3 @@ func getRepositoryPaths(depth int) ([]string, error) {
 
 	return paths, err
 }
-
-

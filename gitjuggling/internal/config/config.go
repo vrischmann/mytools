@@ -16,12 +16,12 @@ type Config struct {
 
 // Workspace defines the settings for a single workspace.
 type Workspace struct {
-	Root             string   `yaml:"root"`
-	GitHubOwners     []string `yaml:"github_owners"`
-	ForgejoURL       string   `yaml:"forgejo_url"`
-	ForgejoUser      string   `yaml:"forgejo_user"`
-	ForgejoToken     string   `yaml:"forgejo_token"`
-	Rules            Rules    `yaml:"rules"`
+	Root         string   `yaml:"root"`
+	GitHubOwners []string `yaml:"github_owners"`
+	ForgejoURL   string   `yaml:"forgejo_url"`
+	ForgejoUser  string   `yaml:"forgejo_user"`
+	ForgejoToken string   `yaml:"forgejo_token"`
+	Rules        Rules    `yaml:"rules"`
 }
 
 // Rules defines where different categories of repos should be placed.
@@ -76,4 +76,3 @@ func (c *Config) GetWorkspace(name string) (*Workspace, error) {
 
 	return ws, nil
 }
-
