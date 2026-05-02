@@ -109,14 +109,23 @@ func getRemoteURL(repoPath, remote string) (string, error) {
 // It handles SSH vs HTTPS differences for the same repo.
 //
 // Examples:
-//   git@github.com:owner/repo.git → github.com/owner/repo
-//   https://github.com/owner/repo.git → github.com/owner/repo
-//   https://github.com/owner/repo → github.com/owner/repo
+//   git@github.com:owner/repo.git       → github.com/owner/repo
+//   ssh://git@github.com/owner/repo.git → github.com/owner/repo
+//   https://github.com/owner/repo.git   → github.com/owner/repo
+//   https://github.com/owner/repo       → github.com/owner/repo
 func NormalizeURL(url string) string {
 	url = strings.TrimSpace(url)
 	url = strings.TrimRight(url, "/")
 
-	// SSH form: git@host:owner/repo.git
+	// SSH URL form: ssh://[user@]host/path.git
+	if after, ok := strings.CutPrefix(url, "ssh://"); ok {
+		if at := strings.Index(after, "@"); at != -1 {
+			after = after[at+1:]
+		}
+		return strings.TrimSuffix(after, ".git")
+	}
+
+	// SCP-style SSH form: git@host:owner/repo.git
 	if after, ok := strings.CutPrefix(url, "git@"); ok {
 		normalized := strings.Replace(after, ":", "/", 1)
 		return strings.TrimSuffix(normalized, ".git")
