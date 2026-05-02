@@ -364,8 +364,17 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			var confirmFn execute.ConfirmFunc
 			if m.interactive {
-				// In TUI mode we skip interactive confirm for now (could add later)
-				confirmFn = nil
+				confirmFn = func(prompt string) bool {
+					p := tea.NewProgram(NewConfirmModel(prompt, ""))
+					finalModel, err := p.Run()
+					if err != nil {
+						return false
+					}
+					if cm, ok := finalModel.(ConfirmModel); ok {
+						return cm.Result().Confirmed
+					}
+					return false
+				}
 			}
 
 			m.execCh = execute.ExecuteActions(m.ctx, m.actions, m.dryRun, confirmFn, m.concurrency)

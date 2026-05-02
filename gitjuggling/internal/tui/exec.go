@@ -210,7 +210,7 @@ func (m ExecModel) renderSummary() string {
 		sb.WriteString(SectionHeader("Failed Items"))
 		sb.WriteString("\n\n")
 		for _, item := range failed {
-			sb.WriteString(SuccessStyle.Render(item.Path))
+			sb.WriteString(ErrorStyle.Render(item.Path))
 			sb.WriteString("\n")
 			if item.Stdout != "" {
 				sb.WriteString(StdoutStyle.Render(item.Stdout))
