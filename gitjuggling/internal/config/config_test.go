@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,46 +17,23 @@ workspace:
       base: /home/user/dev/repos
 `
 	cfg, err := parseYAML(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if cfg.DefaultWorkspace != "" {
-		t.Errorf("expected empty DefaultWorkspace, got %q", cfg.DefaultWorkspace)
-	}
+	require.Empty(t, cfg.DefaultWorkspace)
 
 	ws, ok := cfg.Workspaces["personal"]
-	if !ok {
-		t.Fatal("expected workspace 'personal' to exist")
-	}
+	require.True(t, ok, "expected workspace 'personal' to exist")
 
-	if ws.Root != "/home/user/dev" {
-		t.Errorf("expected Root /home/user/dev, got %q", ws.Root)
-	}
+	require.Equal(t, "/home/user/dev", ws.Root)
+	require.Equal(t, []string{"vrischmann"}, ws.GitHubOwners)
 
-	if len(ws.GitHubOwners) != 1 || ws.GitHubOwners[0] != "vrischmann" {
-		t.Errorf("expected GitHubOwners [vrischmann], got %v", ws.GitHubOwners)
-	}
+	require.Empty(t, ws.ForgejoURL)
+	require.Empty(t, ws.ForgejoUser)
+	require.Empty(t, ws.ForgejoToken)
 
-	if ws.ForgejoURL != "" {
-		t.Errorf("expected empty ForgejoURL, got %q", ws.ForgejoURL)
-	}
-	if ws.ForgejoUser != "" {
-		t.Errorf("expected empty ForgejoUser, got %q", ws.ForgejoUser)
-	}
-	if ws.ForgejoToken != "" {
-		t.Errorf("expected empty ForgejoToken, got %q", ws.ForgejoToken)
-	}
-
-	if ws.Rules.Base != "/home/user/dev/repos" {
-		t.Errorf("expected Rules.Base /home/user/dev/repos, got %q", ws.Rules.Base)
-	}
-	if ws.Rules.Forks != "" {
-		t.Errorf("expected empty Rules.Forks, got %q", ws.Rules.Forks)
-	}
-	if ws.Rules.Archived != "" {
-		t.Errorf("expected empty Rules.Archived, got %q", ws.Rules.Archived)
-	}
+	require.Equal(t, "/home/user/dev/repos", ws.Rules.Base)
+	require.Empty(t, ws.Rules.Forks)
+	require.Empty(t, ws.Rules.Archived)
 }
 
 func TestParseFullConfig(t *testing.T) {
@@ -81,39 +59,20 @@ workspace:
       base: /home/user/work/repos
 `
 	cfg, err := parseYAML(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if cfg.DefaultWorkspace != "personal" {
-		t.Errorf("expected DefaultWorkspace 'personal', got %q", cfg.DefaultWorkspace)
-	}
-
-	if len(cfg.Workspaces) != 2 {
-		t.Fatalf("expected 2 workspaces, got %d", len(cfg.Workspaces))
-	}
+	require.Equal(t, "personal", cfg.DefaultWorkspace)
+	require.Len(t, cfg.Workspaces, 2)
 
 	personal := cfg.Workspaces["personal"]
-	if personal.ForgejoURL != "https://git.example.com" {
-		t.Errorf("expected ForgejoURL 'https://git.example.com', got %q", personal.ForgejoURL)
-	}
-	if personal.ForgejoUser != "vincent" {
-		t.Errorf("expected ForgejoUser 'vincent', got %q", personal.ForgejoUser)
-	}
-	if personal.Rules.Forks != "/home/user/dev/forks" {
-		t.Errorf("expected Rules.Forks '/home/user/dev/forks', got %q", personal.Rules.Forks)
-	}
-	if personal.Rules.Archived != "/home/user/dev/archived" {
-		t.Errorf("expected Rules.Archived '/home/user/dev/archived', got %q", personal.Rules.Archived)
-	}
+	require.Equal(t, "https://git.example.com", personal.ForgejoURL)
+	require.Equal(t, "vincent", personal.ForgejoUser)
+	require.Equal(t, "/home/user/dev/forks", personal.Rules.Forks)
+	require.Equal(t, "/home/user/dev/archived", personal.Rules.Archived)
 
 	work := cfg.Workspaces["work"]
-	if len(work.GitHubOwners) != 1 || work.GitHubOwners[0] != "MyOrg" {
-		t.Errorf("expected GitHubOwners [MyOrg], got %v", work.GitHubOwners)
-	}
-	if work.ForgejoURL != "" {
-		t.Errorf("expected empty ForgejoURL, got %q", work.ForgejoURL)
-	}
+	require.Equal(t, []string{"MyOrg"}, work.GitHubOwners)
+	require.Empty(t, work.ForgejoURL)
 }
 
 func TestGetWorkspace(t *testing.T) {
@@ -128,33 +87,21 @@ workspace:
       base: /home/user/dev/repos
 `
 	cfg, err := parseYAML(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Explicit name
 	ws, err := cfg.GetWorkspace("personal")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ws.Root != "/home/user/dev" {
-		t.Errorf("expected Root /home/user/dev, got %q", ws.Root)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "/home/user/dev", ws.Root)
 
 	// Default fallback
 	ws, err = cfg.GetWorkspace("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ws.Root != "/home/user/dev" {
-		t.Errorf("expected Root /home/user/dev, got %q", ws.Root)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "/home/user/dev", ws.Root)
 
 	// Missing workspace
 	_, err = cfg.GetWorkspace("nonexistent")
-	if err == nil {
-		t.Fatal("expected error for missing workspace")
-	}
+	require.Error(t, err)
 }
 
 // parseYAML is a test helper that parses a YAML string into a Config.
