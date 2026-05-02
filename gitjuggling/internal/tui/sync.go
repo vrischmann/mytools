@@ -103,11 +103,11 @@ type SyncModel struct {
 	clones  int
 
 	// Execution phase
-	progress    ProgressModel
 	completed   int
 	total       int
 	execCh      <-chan execute.ActionResult
 	execResults []execute.ActionResult
+	execLog     []string
 
 	// Summary phase
 	succeeded []execute.ActionResult
@@ -160,7 +160,6 @@ func NewSyncModel(workspace string, configPath string, dryRun, interactive, doPr
 		spinner:      s,
 		loadingSteps: steps,
 		loadingIdx:   0,
-		progress:     NewProgressModel(),
 		ctx:          ctx,
 		cancel:       cancel,
 		configPath:   configPath,
@@ -323,11 +322,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.completed++
 		m.execResults = append(m.execResults, msg.result)
 
-		ratio := 0.0
-		if m.total > 0 {
-			ratio = float64(m.completed) / float64(m.total)
-		}
-		m.progress.SetProgress(ratio, msg.result.Description)
+		m.execLog = append(m.execLog, formatActionResult(msg.result))
 
 		if m.completed >= m.total {
 			// Partition results
@@ -374,7 +369,6 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 
 			m.execCh = execute.ExecuteActions(m.ctx, m.actions, m.dryRun, confirmFn, m.concurrency)
-			m.progress.SetProgress(0, "")
 			return m, tea.Batch(m.waitForActionResult())
 
 		case "q", "ctrl+c":
@@ -549,9 +543,18 @@ func (m SyncModel) renderPlan() string {
 
 func (m SyncModel) renderExecuting() string {
 	var sb strings.Builder
-	sb.WriteString(SectionHeader("Executing"))
+
+	sb.WriteString(SectionHeader(fmt.Sprintf("Executing  %d/%d", m.completed, m.total)))
+	sb.WriteString("\n\n")
+
+	for _, line := range m.execLog {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(DimStyle.Render("\n  [q] Quit"))
 	sb.WriteString("\n")
-	sb.WriteString(m.progress.View())
+
 	return sb.String()
 }
 
@@ -677,6 +680,16 @@ func (m SyncModel) renderPruneDone() string {
 	sb.WriteString("\n")
 
 	return sb.String()
+}
+
+// formatActionResult formats a single action result as a log line.
+func formatActionResult(r execute.ActionResult) string {
+	switch {
+	case r.Success:
+		return fmt.Sprintf("  %s %s", Checkmark(), r.Description)
+	default:
+		return fmt.Sprintf("  %s %s \u2014 %s", CrossMark(), r.Description, ErrorStyle.Render(r.Message))
+	}
 }
 
 // HasFailures returns true if any action or prune failed.
