@@ -573,11 +573,7 @@ func (m SyncModel) renderSummary() string {
 		sb.WriteString(SuccessStyle.Render("Succeeded:"))
 		sb.WriteString("\n")
 		for _, r := range m.succeeded {
-			sb.WriteString(fmt.Sprintf("    %s %s", Checkmark(), r.Description))
-			if r.Message != "" && r.Message != "updated" && r.Message != "cloned" && r.Message != "moved" {
-				sb.WriteString(DimStyle.Render(fmt.Sprintf(" (%s)", r.Message)))
-			}
-			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("    %s %-30s %s\n", Checkmark(), r.Description, DimStyle.Render(r.Path)))
 		}
 	}
 
@@ -586,8 +582,7 @@ func (m SyncModel) renderSummary() string {
 		sb.WriteString(ErrorStyle.Render("Failed:"))
 		sb.WriteString("\n")
 		for _, r := range m.failed {
-			sb.WriteString(fmt.Sprintf("    %s %s\n", CrossMark(), r.Description))
-			sb.WriteString(fmt.Sprintf("      %s\n", ErrorStyle.Render(r.Message)))
+			sb.WriteString(fmt.Sprintf("    %s %-30s %s\n", CrossMark(), r.Description, ErrorStyle.Render(r.Message)))
 		}
 	}
 
