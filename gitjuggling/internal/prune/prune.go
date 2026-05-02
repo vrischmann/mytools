@@ -36,7 +36,7 @@ func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo) [
 
 	var orphans []*OrphanRepo
 
-	for _, repo := range local.Repos {
+	for _, repo := range local.Iter() {
 		hasMatch := false
 		for _, url := range repo.RemoteURLs {
 			if _, ok := remoteURLs[discover.NormalizeURL(url)]; ok {

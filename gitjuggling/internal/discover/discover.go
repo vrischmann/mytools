@@ -3,6 +3,7 @@ package discover
 import (
 	"fmt"
 	"io/fs"
+	"iter"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,21 @@ type LocalRepo struct {
 
 // LocalRepos holds all discovered local repos with lookup indices.
 type LocalRepos struct {
-	Repos  []*LocalRepo
+	repos  []*LocalRepo
 	ByURL  map[string]string     // normalized URL → local path
 	ByPath map[string]*LocalRepo // absolute path → LocalRepo
 	ByName map[string][]string   // dir name → list of local paths
+}
+
+// Iter returns an iterator over all discovered local repos.
+func (lr *LocalRepos) Iter() iter.Seq2[int, *LocalRepo] {
+	return func(yield func(int, *LocalRepo) bool) {
+		for i, repo := range lr.repos {
+			if !yield(i, repo) {
+				return
+			}
+		}
+	}
 }
 
 // Discover walks the filesystem under root, finding git repos by looking for
@@ -76,7 +88,7 @@ func Discover(root string) (*LocalRepos, error) {
 	}
 
 	return &LocalRepos{
-		Repos:  repos,
+		repos:  repos,
 		ByURL:  byURL,
 		ByPath: byPath,
 		ByName: byName,
