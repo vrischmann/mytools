@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -156,5 +155,4 @@ func getRepositoryPaths(depth int) ([]string, error) {
 	return paths, err
 }
 
-// Suppress unused import
-var _ = context.Background
+

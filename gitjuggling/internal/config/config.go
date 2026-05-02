@@ -8,8 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:generate go run golang.org/x/tools/cmd/stringer -type=Rules
-
 // Config represents the top-level gitjuggling configuration.
 type Config struct {
 	DefaultWorkspace string                `yaml:"default_workspace"`

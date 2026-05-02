@@ -2,7 +2,6 @@ package gitmodules
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -175,7 +174,3 @@ func (p *parser) peek(n int) string {
 	return p.input[:n]
 }
 
-// Ensure path comparisons use filepath semantics
-func init() {
-	_ = filepath.Separator
-}
