@@ -17,8 +17,9 @@ type LocalRepo struct {
 // LocalRepos holds all discovered local repos with lookup indices.
 type LocalRepos struct {
 	Repos  []*LocalRepo
-	ByURL  map[string]string   // normalized URL → local path
-	ByName map[string][]string // dir name → list of local paths
+	ByURL  map[string]string    // normalized URL → local path
+	ByPath map[string]*LocalRepo // absolute path → LocalRepo
+	ByName map[string][]string  // dir name → list of local paths
 }
 
 // Discover walks the filesystem under root, finding git repos by looking for
@@ -67,9 +68,15 @@ func Discover(root string) (*LocalRepos, error) {
 		return nil, fmt.Errorf("walking %s: %w", root, err)
 	}
 
+	byPath := make(map[string]*LocalRepo, len(repos))
+	for _, r := range repos {
+		byPath[r.Path] = r
+	}
+
 	return &LocalRepos{
 		Repos:  repos,
 		ByURL:  byURL,
+		ByPath: byPath,
 		ByName: byName,
 	}, nil
 }

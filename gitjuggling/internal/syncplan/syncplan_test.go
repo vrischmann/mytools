@@ -160,6 +160,40 @@ func TestBuildPlanMove(t *testing.T) {
 	}
 }
 
+func TestBuildPlanMoveDestinationOccupied(t *testing.T) {
+	ws := testWorkspace()
+
+	// Fork repo — rules say it goes to /home/user/dev/forks/
+	repo := makeRepo("nvim-treesitter", "vrischmann", true, false)
+
+	// Currently lives at a different location
+	currentPath := filepath.Join("/home/user/dev/stuff/neovim", "nvim-treesitter")
+	expectedPath := filepath.Join("/home/user/dev/forks", "nvim-treesitter")
+
+	// The expected path is already occupied by a different repo
+	local := &discover.LocalRepos{
+		ByURL: map[string]string{"github.com/vrischmann/nvim-treesitter": currentPath},
+		ByPath: map[string]*discover.LocalRepo{
+			currentPath:  {Path: currentPath, RemoteURLs: map[string]string{"origin": "git@github.com:vrischmann/nvim-treesitter.git"}},
+			expectedPath: {Path: expectedPath, RemoteURLs: map[string]string{"origin": "https://github.com/nvim-treesitter/nvim-treesitter"}},
+		},
+		ByName: map[string][]string{"nvim-treesitter": {currentPath, expectedPath}},
+	}
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+
+	// Should fall back to update in place, not try to move
+	if actions[0].Type != ActionUpdate {
+		t.Fatalf("expected ActionUpdate (destination occupied), got %d", actions[0].Type)
+	}
+	if actions[0].LocalPath != currentPath {
+		t.Errorf("expected LocalPath %q, got %q", currentPath, actions[0].LocalPath)
+	}
+}
+
 func TestClassifyClash(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, false)

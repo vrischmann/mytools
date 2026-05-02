@@ -102,12 +102,22 @@ func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws 
 				LocalPath: localPath,
 			})
 		default:
-			actions = append(actions, Action{
-				Type:         ActionMove,
-				Repo:         repo,
-				CurrentPath:  localPath,
-				ExpectedPath: expectedPath,
-			})
+			// If the expected path is already occupied by a different
+			// local repo, just update in place instead of moving.
+			if _, occupied := local.ByPath[expectedPath]; occupied {
+				actions = append(actions, Action{
+					Type:      ActionUpdate,
+					Repo:      repo,
+					LocalPath: localPath,
+				})
+			} else {
+				actions = append(actions, Action{
+					Type:         ActionMove,
+					Repo:         repo,
+					CurrentPath:  localPath,
+					ExpectedPath: expectedPath,
+				})
+			}
 		}
 	}
 
