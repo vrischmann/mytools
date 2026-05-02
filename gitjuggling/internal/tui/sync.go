@@ -12,6 +12,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -98,9 +99,11 @@ type SyncModel struct {
 	actions      []syncplan.Action
 
 	// Plan phase
-	updates int
-	moves   int
-	clones  int
+	viewport viewport.Model
+	ready    bool
+	updates  int
+	moves    int
+	clones   int
 
 	// Execution phase
 	completed   int
@@ -233,6 +236,13 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, msg.Height-2)
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - 2
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -315,6 +325,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.phase = syncPhasePlan
+		m.viewport.SetContent(m.buildPlanContent())
 		return m, nil
 
 	// Execution phase messages
@@ -383,6 +394,11 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.cancel()
 			return m, tea.Quit
+
+		default:
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 		}
 
 	case syncPhaseExecuting:
@@ -505,6 +521,13 @@ func (m SyncModel) renderLoading() string {
 }
 
 func (m SyncModel) renderPlan() string {
+	if !m.ready {
+		return ""
+	}
+	return m.viewport.View()
+}
+
+func (m SyncModel) buildPlanContent() string {
 	var sb strings.Builder
 
 	sb.WriteString(SectionHeader("Plan"))
