@@ -686,9 +686,9 @@ func (m SyncModel) renderPruneDone() string {
 func formatActionResult(r execute.ActionResult) string {
 	switch {
 	case r.Success:
-		return fmt.Sprintf("  %s %s", Checkmark(), r.Description)
+		return fmt.Sprintf("  %s %-30s %s", Checkmark(), r.Description, DimStyle.Render(r.Path))
 	default:
-		return fmt.Sprintf("  %s %s \u2014 %s", CrossMark(), r.Description, ErrorStyle.Render(r.Message))
+		return fmt.Sprintf("  %s %-30s %s", CrossMark(), r.Description, ErrorStyle.Render(r.Message))
 	}
 }
 

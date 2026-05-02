@@ -15,6 +15,7 @@ import (
 // ActionResult holds the outcome of executing a single action.
 type ActionResult struct {
 	Description string
+	Path        string
 	Success     bool
 	Message     string
 }
@@ -82,20 +83,23 @@ func dryRunAction(action syncplan.Action) ActionResult {
 	case syncplan.ActionUpdate:
 		return ActionResult{
 			Description: desc,
+			Path:        action.LocalPath,
 			Success:     true,
-			Message:     fmt.Sprintf("would update: %s (stash + pull --rebase)", action.LocalPath),
+			Message:     fmt.Sprintf("would update (stash + pull --rebase)"),
 		}
 	case syncplan.ActionMove:
 		return ActionResult{
 			Description: desc,
+			Path:        action.ExpectedPath,
 			Success:     true,
 			Message:     fmt.Sprintf("would move: %s → %s", action.CurrentPath, action.ExpectedPath),
 		}
 	case syncplan.ActionClone:
 		return ActionResult{
 			Description: desc,
+			Path:        action.ExpectedPath,
 			Success:     true,
-			Message:     fmt.Sprintf("would clone: %s → %s", action.Repo.CloneURL, action.ExpectedPath),
+			Message:     fmt.Sprintf("would clone"),
 		}
 	default:
 		return ActionResult{Description: desc, Success: false, Message: "unknown action type"}
@@ -128,6 +132,7 @@ func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
 	if output, err := stashCmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        localPath,
 			Success:     false,
 			Message:     fmt.Sprintf("git stash failed: %s", strings.TrimSpace(string(output))),
 		}
@@ -139,6 +144,7 @@ func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        localPath,
 			Success:     false,
 			Message:     fmt.Sprintf("git pull --rebase failed: %s", strings.TrimSpace(string(output))),
 		}
@@ -146,6 +152,7 @@ func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
 
 	return ActionResult{
 		Description: desc,
+		Path:        localPath,
 		Success:     true,
 		Message:     "updated",
 	}
@@ -159,6 +166,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 		if !confirmFn(prompt) {
 			return ActionResult{
 				Description: desc,
+				Path:        currentPath,
 				Success:     true,
 				Message:     "skipped (user declined)",
 			}
@@ -169,6 +177,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        expectedPath,
 			Success:     false,
 			Message:     fmt.Sprintf("failed to create parent directory: %v", err),
 		}
@@ -177,6 +186,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 	if err := os.Rename(currentPath, expectedPath); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        expectedPath,
 			Success:     false,
 			Message:     fmt.Sprintf("failed to move: %v", err),
 		}
@@ -184,6 +194,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 
 	return ActionResult{
 		Description: desc,
+		Path:        expectedPath,
 		Success:     true,
 		Message:     "moved",
 	}
@@ -196,6 +207,7 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        expectedPath,
 			Success:     false,
 			Message:     fmt.Sprintf("failed to create parent directory: %v", err),
 		}
@@ -205,6 +217,7 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
+			Path:        expectedPath,
 			Success:     false,
 			Message:     fmt.Sprintf("git clone failed: %s", strings.TrimSpace(string(output))),
 		}
@@ -212,7 +225,8 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 
 	return ActionResult{
 		Description: desc,
+		Path:        expectedPath,
 		Success:     true,
-		Message:     "cloned",
+			Message:     "cloned",
 	}
 }
