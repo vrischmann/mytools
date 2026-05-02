@@ -4,7 +4,9 @@
 
 This is a Cargo workspace containing personal utility tools. Each tool is a standalone binary in its own crate.
 
-Workspace members: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+Workspace members: `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+
+Note: `gitjuggling` was ported to Go and lives in the same directory but is built separately with `go build`.
 
 ## Build Commands
 
@@ -32,7 +34,15 @@ cargo fmt --check --all
 cargo run --release -p <package> -- <args>
 ```
 
-Where `<package>` is one of: `gitjuggling`, `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+Where `<package>` is one of: `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+
+For `gitjuggling`, use Go instead:
+
+```bash
+cd gitjuggling && go run . -- <args>
+# or
+cd gitjuggling && go build -o gitjuggling . && ./gitjuggling <args>
+```
 
 ## Justfile Recipes
 
@@ -46,7 +56,8 @@ A `justfile` exists with the following recipes:
 
 ## Code Style
 
-- Rust editions vary by crate: `gitjuggling`, `cargo-target-clean`, `zoekt-reindex`, `ansible-password-agent` use edition 2021; `git-stacked`, `git-journal` use edition 2024
+- Rust editions vary by crate: `cargo-target-clean`, `zoekt-reindex`, `ansible-password-agent` use edition 2021; `git-stacked`, `git-journal` use edition 2024
+- `gitjuggling` is written in Go — see `gitjuggling/` for its own build/test commands
 - Follow standard Rust formatting (`cargo fmt`)
 - Address all clippy warnings
 
@@ -60,12 +71,12 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 
 | Dependency | Used by | Purpose |
 |-----------|---------|---------|
-| `clap` | gitjuggling, cargo-target-clean, git-journal, zoekt-reindex, ansible-password-agent | CLI argument parsing (derive or builder API) |
-| `anyhow` | gitjuggling, cargo-target-clean, zoekt-reindex, ansible-password-agent | Error handling |
-| `rayon` | gitjuggling, cargo-target-clean, zoekt-reindex | Parallel processing |
-| `jwalk` | gitjuggling, cargo-target-clean, git-journal, zoekt-reindex | Parallel directory walking |
+| `clap` | cargo-target-clean, git-journal, zoekt-reindex, ansible-password-agent | CLI argument parsing (derive or builder API) |
+| `anyhow` | cargo-target-clean, zoekt-reindex, ansible-password-agent | Error handling |
+| `rayon` | cargo-target-clean, zoekt-reindex | Parallel processing |
+| `jwalk` | cargo-target-clean, git-journal, zoekt-reindex | Parallel directory walking |
 | `git2` | git-stacked, git-journal | Git repository operations |
-| `onlyerror` | gitjuggling, git-stacked | Error derive macros |
+| `onlyerror` | git-stacked | Error derive macros |
 | `chrono` | git-journal | Date/time handling |
 | `serde` + `toml` | zoekt-reindex | Config file deserialization |
 | `rpassword` | ansible-password-agent | Terminal password input via /dev/tty |
@@ -74,15 +85,16 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 
 ## Tool-Specific Notes
 
-### gitjuggling (v1.4.0, edition 2021)
-- Uses builder-style `clap` (not derive)
-- Uses `rayon` for parallel git command execution
-- Default concurrency is 2 (limited by SSH multiplexing)
-- Default search depth is 3
-- Supports submodules detection via custom `.gitmodules` parser (`src/gitmodules.rs`)
-- Uses `indicatif` for progress bar, `colored` for terminal output
-- Has unit tests for gitmodules parser
-- Has a COPR repository for Fedora installation
+### gitjuggling (Go)
+
+- Ported from Rust to Go with Bubbletea TUI
+- Located in `gitjuggling/` but is NOT part of the Cargo workspace
+- Build with `cd gitjuggling && go build .`
+- Test with `cd gitjuggling && go test ./...`
+- Uses YAML config (`<UserConfigDir>/gitjuggling/config.yaml`)
+- Dependencies: bubbletea, bubbles, lipgloss, cobra, yaml.v3, x/sync
+- Two subcommands: `sync` (multi-phase TUI) and `exec` (progress bar TUI)
+- Has its own `justfile` with build/test/check/install recipes
 
 ### git-stacked (v0.1.0, edition 2024)
 - No CLI arguments — runs in the current git repository
