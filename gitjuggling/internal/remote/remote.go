@@ -21,6 +21,18 @@ type RemoteRepo struct {
 	Source     RemoteSource
 }
 
+// SourceLabel returns a short human-readable label for the repo's source.
+func (r *RemoteRepo) SourceLabel() string {
+	switch r.Source {
+	case SourceGitHub:
+		return "github"
+	case SourceForgejo:
+		return "forgejo"
+	default:
+		return "unknown"
+	}
+}
+
 // DedupKey returns a lowercase (owner, name) tuple for deduplication.
 func (r *RemoteRepo) DedupKey() [2]string {
 	return [2]string{strings.ToLower(r.Owner), strings.ToLower(r.Name)}

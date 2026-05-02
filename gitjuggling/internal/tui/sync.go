@@ -501,7 +501,7 @@ func (m SyncModel) buildPlanContent() string {
 		sb.WriteString("\n")
 		for _, a := range m.actions {
 			if a.Type == syncplan.ActionUpdate {
-				sb.WriteString(fmt.Sprintf("    %s %s/%s\n", Checkmark(), a.Repo.Owner, a.Repo.Name))
+				sb.WriteString(fmt.Sprintf("    %s %s/%s (%s)\n", Checkmark(), a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel()))
 			}
 		}
 	}
@@ -509,8 +509,8 @@ func (m SyncModel) buildPlanContent() string {
 		sb.WriteString("\n")
 		for _, a := range m.actions {
 			if a.Type == syncplan.ActionMove {
-				sb.WriteString(fmt.Sprintf("    %s %s/%s  %s → %s\n",
-					Arrow(), a.Repo.Owner, a.Repo.Name,
+				sb.WriteString(fmt.Sprintf("    %s %s/%s (%s)  %s → %s\n",
+					Arrow(), a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel(),
 					DimStyle.Render(a.CurrentPath),
 					DimStyle.Render(a.ExpectedPath)))
 			}
@@ -520,8 +520,8 @@ func (m SyncModel) buildPlanContent() string {
 		sb.WriteString("\n")
 		for _, a := range m.actions {
 			if a.Type == syncplan.ActionClone {
-				sb.WriteString(fmt.Sprintf("    + %s/%s  → %s\n",
-					a.Repo.Owner, a.Repo.Name,
+				sb.WriteString(fmt.Sprintf("    + %s/%s (%s)  → %s\n",
+					a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel(),
 					DimStyle.Render(a.ExpectedPath)))
 			}
 		}

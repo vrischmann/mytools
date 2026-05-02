@@ -77,7 +77,7 @@ func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool,
 // ---------------------------------------------------------------------------
 
 func dryRunAction(action syncplan.Action) ActionResult {
-	desc := fmt.Sprintf("%s/%s", action.Repo.Owner, action.Repo.Name)
+	desc := fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel())
 
 	switch action.Type {
 	case syncplan.ActionUpdate:
@@ -116,7 +116,7 @@ func executeAction(action syncplan.Action, confirmFn ConfirmFunc) ActionResult {
 		return executeClone(action.Repo, action.ExpectedPath)
 	default:
 		return ActionResult{
-			Description: fmt.Sprintf("%s/%s", action.Repo.Owner, action.Repo.Name),
+			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
 			Success:     false,
 			Message:     "unknown action type",
 		}
@@ -124,7 +124,7 @@ func executeAction(action syncplan.Action, confirmFn ConfirmFunc) ActionResult {
 }
 
 func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
-	desc := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	// git stash -u
 	stashCmd := exec.Command("git", "stash", "-u")
@@ -159,7 +159,7 @@ func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
 }
 
 func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, confirmFn ConfirmFunc) ActionResult {
-	desc := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	if confirmFn != nil {
 		prompt := fmt.Sprintf("Move %s from %s to %s?", desc, currentPath, expectedPath)
@@ -201,7 +201,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 }
 
 func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
-	desc := fmt.Sprintf("%s/%s", repo.Owner, repo.Name)
+	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
