@@ -1,0 +1,161 @@
+package syncplan
+
+import (
+	"path/filepath"
+	"testing"
+
+	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
+)
+
+func testWorkspace() *config.Workspace {
+	return &config.Workspace{
+		Root:         "/home/user/dev",
+		GitHubOwners: []string{"testowner"},
+		Rules: config.Rules{
+			Base:     "/home/user/dev/repos",
+			Forks:    "/home/user/dev/forks",
+			Archived: "/home/user/dev/archived",
+		},
+	}
+}
+
+func makeRepo(name, owner string, isFork, isArchived bool) *remote.RemoteRepo {
+	return &remote.RemoteRepo{
+		Name:       name,
+		Owner:      owner,
+		IsFork:     isFork,
+		IsArchived: isArchived,
+		IsMirror:   false,
+		CloneURL:   "https://github.com/" + owner + "/" + name + ".git",
+		Source:     remote.SourceGitHub,
+	}
+}
+
+func TestClassifyBaseRepo(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, false)
+	got := ClassifyRepo(repo, ws)
+	want := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
+	}
+}
+
+func TestClassifyFork(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", true, false)
+	got := ClassifyRepo(repo, ws)
+	want := filepath.Join("/home/user/dev/forks", "owner", "myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
+	}
+}
+
+func TestClassifyArchived(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, true)
+	got := ClassifyRepo(repo, ws)
+	want := filepath.Join("/home/user/dev/archived", "owner", "myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
+	}
+}
+
+func TestClassifyForkTakesPriorityOverArchived(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", true, true)
+	got := ClassifyRepo(repo, ws)
+	want := filepath.Join("/home/user/dev/forks", "owner", "myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
+	}
+}
+
+func TestClassifyNoForksDirFallsBackToBase(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Forks = ""
+	repo := makeRepo("myrepo", "owner", true, false)
+	got := ClassifyRepo(repo, ws)
+	want := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	if got != want {
+		t.Errorf("ClassifyRepo() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlanClone(t *testing.T) {
+	ws := testWorkspace()
+	local := &discover.LocalRepos{
+		ByURL:  map[string]string{},
+		ByName: map[string][]string{},
+	}
+	repo := makeRepo("newrepo", "owner", false, false)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+
+	if actions[0].Type != ActionClone {
+		t.Errorf("expected ActionClone, got %d", actions[0].Type)
+	}
+
+	expected := filepath.Join("/home/user/dev/repos", "owner", "newrepo")
+	if actions[0].ExpectedPath != expected {
+		t.Errorf("expected path %q, got %q", expected, actions[0].ExpectedPath)
+	}
+}
+
+func TestBuildPlanUpdate(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, false)
+	expected := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+
+	local := &discover.LocalRepos{
+		ByURL:  map[string]string{"github.com/owner/myrepo": expected},
+		ByName: map[string][]string{},
+	}
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+
+	if actions[0].Type != ActionUpdate {
+		t.Fatalf("expected ActionUpdate, got %d", actions[0].Type)
+	}
+
+	if actions[0].LocalPath != expected {
+		t.Errorf("expected LocalPath %q, got %q", expected, actions[0].LocalPath)
+	}
+}
+
+func TestBuildPlanMove(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, false)
+	wrongPath := "/home/user/dev/some-other-place/owner/myrepo"
+
+	local := &discover.LocalRepos{
+		ByURL:  map[string]string{"github.com/owner/myrepo": wrongPath},
+		ByName: map[string][]string{},
+	}
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+
+	if actions[0].Type != ActionMove {
+		t.Fatalf("expected ActionMove, got %d", actions[0].Type)
+	}
+
+	if actions[0].CurrentPath != wrongPath {
+		t.Errorf("expected CurrentPath %q, got %q", wrongPath, actions[0].CurrentPath)
+	}
+
+	expected := filepath.Join("/home/user/dev/repos", "owner", "myrepo")
+	if actions[0].ExpectedPath != expected {
+		t.Errorf("expected ExpectedPath %q, got %q", expected, actions[0].ExpectedPath)
+	}
+}

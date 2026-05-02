@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "gitjuggling",
     "git-stacked",
     "cargo-target-clean",
     "git-journal",

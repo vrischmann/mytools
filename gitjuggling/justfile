@@ -1,0 +1,19 @@
+build:
+    go build -o gitjuggling .
+
+test:
+    go test ./...
+
+check:
+    go vet ./...
+
+install:
+    go install .
+
+clean:
+    rm -f gitjuggling
+
+list-packages:
+    go list ./...
+
+.PHONY: build test check install clean list-packages

@@ -1,36 +1,77 @@
 # gitjuggling
 
-This is a simple tool to run a git command in all repositories under the current working directory.
+A tool to sync local git repositories with upstream GitHub/Forgejo remotes and run git commands across multiple repositories.
 
-For example, with the following directory layout:
+## Commands
+
+### `sync` — Sync repos with upstream
+
 ```
-.
-├── bar
-│   ├── foobar
-│   └── .git
-├── baz
-│   ├── foobar
-│   └── .git
-└── foo
-    ├── foobar
-    └── .git
+$ gitjuggling sync [workspace] [flags]
 ```
 
-You can run `git pull` in all repositories like this:
+Discovers remote repos from GitHub/Forgejo, compares with local repos, and executes update/move/clone actions as needed.
+
+Flags:
+- `--config` — path to config file (default: `~/.config/gitjuggling/config.yaml`)
+- `--dry-run` — show what would be done without making changes
+- `--interactive` — prompt before destructive actions (default: true)
+- `--prune` — remove local repos with no upstream match
+- `-c, --concurrency` — concurrency limit (default: 2)
+
+### `exec` — Run a git command in all repos
+
 ```
-$ gitjuggling fetch --all -p
-/tmp/test/foo executing fetch --all -p
-/tmp/test/baz executing fetch --all -p
-/tmp/test/bar executing fetch --all -p
-3 items succeeded, 0 items failed
+$ gitjuggling exec -- <git args...>
 ```
 
-# Installation
+Flags:
+- `-d, --depth` — search depth for repository discovery (default: 3)
+- `-c, --concurrency` — concurrency limit (default: 2)
+- `-v, --verbose` — show output from all repos, not just failures
 
-## Fedora
+## Configuration
 
-You can use the COPR repository:
+Config file location: `<UserConfigDir>/gitjuggling/config.yaml`
+
+On Linux: `~/.config/gitjuggling/config.yaml`
+On macOS: `~/Library/Application Support/gitjuggling/config.yaml`
+
+Example:
+
+```yaml
+default_workspace: personal
+
+workspace:
+  personal:
+    root: /home/user/dev
+    github_owners: [vrischmann]
+    forgejo_url: https://git.example.com
+    forgejo_user: vincent
+    forgejo_token: "op://vault/item/field"
+    rules:
+      base: /home/user/dev/repos
+      forks: /home/user/dev/forks
+      archived: /home/user/dev/archived
+
+  work:
+    root: /home/user/work
+    github_owners: [MyOrg]
+    rules:
+      base: /home/user/work/repos
 ```
-$ sudo dnf copr enable vrischmann/gitjuggling
-$ sudo dnf install --refresh gitjuggling
+
+## Build
+
+```
+go build -o gitjuggling .
+```
+
+Or use the justfile:
+
+```
+just build    # build binary
+just test     # run tests
+just check    # run go vet
+just install  # install to $GOPATH/bin
 ```
