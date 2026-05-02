@@ -513,27 +513,33 @@ func (m SyncModel) renderPlan() string {
 	sb.WriteString("\n")
 
 	// Group actions by type
-	for _, a := range m.actions {
-		switch a.Type {
-		case syncplan.ActionUpdate:
-			sb.WriteString(fmt.Sprintf("\n    %s %s/%s\n", Checkmark(), a.Repo.Owner, a.Repo.Name))
+	if m.updates > 0 {
+		sb.WriteString("\n")
+		for _, a := range m.actions {
+			if a.Type == syncplan.ActionUpdate {
+				sb.WriteString(fmt.Sprintf("    %s %s/%s\n", Checkmark(), a.Repo.Owner, a.Repo.Name))
+			}
 		}
 	}
-	for _, a := range m.actions {
-		switch a.Type {
-		case syncplan.ActionMove:
-			sb.WriteString(fmt.Sprintf("\n    %s %s/%s  %s → %s\n",
-				Arrow(), a.Repo.Owner, a.Repo.Name,
-				DimStyle.Render(a.CurrentPath),
-				DimStyle.Render(a.ExpectedPath)))
+	if m.moves > 0 {
+		sb.WriteString("\n")
+		for _, a := range m.actions {
+			if a.Type == syncplan.ActionMove {
+				sb.WriteString(fmt.Sprintf("    %s %s/%s  %s → %s\n",
+					Arrow(), a.Repo.Owner, a.Repo.Name,
+					DimStyle.Render(a.CurrentPath),
+					DimStyle.Render(a.ExpectedPath)))
+			}
 		}
 	}
-	for _, a := range m.actions {
-		switch a.Type {
-		case syncplan.ActionClone:
-			sb.WriteString(fmt.Sprintf("\n    + %s/%s  → %s\n",
-				a.Repo.Owner, a.Repo.Name,
-				DimStyle.Render(a.ExpectedPath)))
+	if m.clones > 0 {
+		sb.WriteString("\n")
+		for _, a := range m.actions {
+			if a.Type == syncplan.ActionClone {
+				sb.WriteString(fmt.Sprintf("    + %s/%s  → %s\n",
+					a.Repo.Owner, a.Repo.Name,
+					DimStyle.Render(a.ExpectedPath)))
+			}
 		}
 	}
 
