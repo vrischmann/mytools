@@ -85,7 +85,7 @@ func dryRunAction(action syncplan.Action) ActionResult {
 			Description: desc,
 			Path:        action.LocalPath,
 			Success:     true,
-			Message:     fmt.Sprintf("would update (stash + pull --rebase)"),
+			Message:     "would update (stash + pull --rebase)",
 		}
 	case syncplan.ActionMove:
 		return ActionResult{
@@ -99,7 +99,7 @@ func dryRunAction(action syncplan.Action) ActionResult {
 			Description: desc,
 			Path:        action.ExpectedPath,
 			Success:     true,
-			Message:     fmt.Sprintf("would clone"),
+			Message:     "would clone",
 		}
 	default:
 		return ActionResult{Description: desc, Success: false, Message: "unknown action type"}

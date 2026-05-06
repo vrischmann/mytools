@@ -39,13 +39,6 @@ type syncActionResultMsg struct {
 	result execute.ActionResult
 }
 
-type syncPruneResultMsg struct {
-	result *prune.PruneResult
-}
-
-type syncErrMsg struct {
-	err error
-}
 
 // ---------------------------------------------------------------------------
 // Phases

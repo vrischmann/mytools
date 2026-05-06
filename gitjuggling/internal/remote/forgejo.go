@@ -82,7 +82,7 @@ func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Forgejo API returned %d for user %q", resp.StatusCode, user)
+			return nil, fmt.Errorf("forgejo API returned %d for user %q", resp.StatusCode, user)
 		}
 
 		var pageRepos []forgejoRepo
