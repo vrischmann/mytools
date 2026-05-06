@@ -125,6 +125,9 @@ func TestBuildPlanUpdate(t *testing.T) {
 	if actions[0].LocalPath != expected {
 		t.Errorf("expected LocalPath %q, got %q", expected, actions[0].LocalPath)
 	}
+	if !actions[0].AlreadyInPlace {
+		t.Fatalf("expected AlreadyInPlace to be true")
+	}
 }
 
 func TestBuildPlanMove(t *testing.T) {
@@ -182,6 +185,9 @@ func TestBuildPlanMoveDestinationOccupied(t *testing.T) {
 	}
 	if actions[0].LocalPath != currentPath {
 		t.Errorf("expected LocalPath %q, got %q", currentPath, actions[0].LocalPath)
+	}
+	if actions[0].AlreadyInPlace {
+		t.Fatalf("expected AlreadyInPlace to be false")
 	}
 }
 

@@ -43,6 +43,42 @@ func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 	}
 }
 
+func TestBuildExecutableActionsSkipsPullForReposAlreadyInPlace(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
+
+	m := SyncModel{
+		skipPull: true,
+		actions: []syncplan.Action{
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/in-place", ExpectedPath: "/tmp/in-place", AlreadyInPlace: true},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/misplaced", ExpectedPath: "/tmp/expected"},
+			{Type: syncplan.ActionClone, Repo: repo, ExpectedPath: "/tmp/clone"},
+		},
+		skippedPulls: 1,
+	}
+
+	actions := m.buildExecutableActions()
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 executable actions, got %d", len(actions))
+	}
+	if actions[0].LocalPath != "/tmp/misplaced" {
+		t.Fatalf("expected misplaced repo update to remain executable, got %q", actions[0].LocalPath)
+	}
+	if actions[1].Type != syncplan.ActionClone {
+		t.Fatalf("expected clone action to remain executable, got %v", actions[1].Type)
+	}
+
+	results := m.buildSkippedPullResults()
+	if len(results) != 1 {
+		t.Fatalf("expected 1 skipped pull result, got %d", len(results))
+	}
+	if results[0].Path != "/tmp/in-place" {
+		t.Fatalf("expected skipped pull path /tmp/in-place, got %q", results[0].Path)
+	}
+	if results[0].Message != "skipped (pull disabled)" {
+		t.Fatalf("unexpected skipped pull message %q", results[0].Message)
+	}
+}
+
 func TestStartExecutionWithOnlySkippedMovesFinishesImmediately(t *testing.T) {
 	m := SyncModel{}
 

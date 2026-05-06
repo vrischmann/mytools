@@ -19,11 +19,12 @@ const (
 
 // Action represents a planned action for a single remote repo.
 type Action struct {
-	Type         ActionType
-	Repo         *remote.RemoteRepo
-	LocalPath    string // set for ActionUpdate
-	CurrentPath  string // set for ActionMove
-	ExpectedPath string // set for ActionMove, ActionClone
+	Type           ActionType
+	Repo           *remote.RemoteRepo
+	LocalPath      string // set for ActionUpdate
+	CurrentPath    string // set for ActionMove
+	ExpectedPath   string // set for ActionMove, ActionClone
+	AlreadyInPlace bool   // set for ActionUpdate when LocalPath == ExpectedPath
 }
 
 // ClassifyRepo determines the expected local directory for a remote repo
@@ -89,18 +90,21 @@ func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws 
 			})
 		case localPath == expectedPath:
 			actions = append(actions, Action{
-				Type:      ActionUpdate,
-				Repo:      repo,
-				LocalPath: localPath,
+				Type:           ActionUpdate,
+				Repo:           repo,
+				LocalPath:      localPath,
+				ExpectedPath:   expectedPath,
+				AlreadyInPlace: true,
 			})
 		default:
 			// If the expected path is already occupied by a different
 			// local repo, just update in place instead of moving.
 			if _, occupied := local.FindByPath(expectedPath); occupied {
 				actions = append(actions, Action{
-					Type:      ActionUpdate,
-					Repo:      repo,
-					LocalPath: localPath,
+					Type:         ActionUpdate,
+					Repo:         repo,
+					LocalPath:    localPath,
+					ExpectedPath: expectedPath,
 				})
 			} else {
 				actions = append(actions, Action{

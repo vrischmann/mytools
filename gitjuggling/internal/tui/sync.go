@@ -77,6 +77,7 @@ type SyncModel struct {
 	dryRun      bool
 	interactive bool
 	doPrune     bool
+	skipPull    bool
 	concurrency int
 
 	// Config
@@ -94,11 +95,12 @@ type SyncModel struct {
 	actions      []syncplan.Action
 
 	// Plan phase
-	viewport viewport.Model
-	ready    bool
-	updates  int
-	moves    int
-	clones   int
+	viewport     viewport.Model
+	ready        bool
+	updates      int
+	skippedPulls int
+	moves        int
+	clones       int
 
 	// Move confirmation phase
 	moveConfirmIndices []int
@@ -137,7 +139,7 @@ type loadingStep struct {
 }
 
 // NewSyncModel creates a new sync TUI model.
-func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune bool, concurrency int) SyncModel {
+func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune, skipPull bool, concurrency int) SyncModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = SuccessStyle
@@ -156,6 +158,7 @@ func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactiv
 		dryRun:       dryRun,
 		interactive:  interactive,
 		doPrune:      doPrune,
+		skipPull:     skipPull,
 		concurrency:  concurrency,
 		ws:           ws,
 		spinner:      s,
@@ -232,18 +235,38 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 }
 
 func (m SyncModel) buildExecutableActions() []syncplan.Action {
-	if len(m.skippedMoveIndices) == 0 {
-		return m.actions
-	}
-
-	actions := make([]syncplan.Action, 0, len(m.actions)-len(m.skippedMoveIndices))
+	actions := make([]syncplan.Action, 0, len(m.actions))
 	for i, action := range m.actions {
 		if action.Type == syncplan.ActionMove && m.skippedMoveIndices[i] {
+			continue
+		}
+		if action.Type == syncplan.ActionUpdate && m.skipPull && action.AlreadyInPlace {
 			continue
 		}
 		actions = append(actions, action)
 	}
 	return actions
+}
+
+func (m SyncModel) buildSkippedPullResults() []execute.ActionResult {
+	if !m.skipPull {
+		return nil
+	}
+
+	results := make([]execute.ActionResult, 0, m.skippedPulls)
+	for _, action := range m.actions {
+		if action.Type != syncplan.ActionUpdate || !action.AlreadyInPlace {
+			continue
+		}
+
+		results = append(results, execute.ActionResult{
+			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
+			Path:        action.LocalPath,
+			Success:     true,
+			Message:     "skipped (pull disabled)",
+		})
+	}
+	return results
 }
 
 func (m SyncModel) buildSkippedMoveResults() []execute.ActionResult {
@@ -360,7 +383,11 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, a := range m.actions {
 			switch a.Type {
 			case syncplan.ActionUpdate:
-				m.updates++
+				if m.skipPull && a.AlreadyInPlace {
+					m.skippedPulls++
+				} else {
+					m.updates++
+				}
 			case syncplan.ActionMove:
 				m.moves++
 			case syncplan.ActionClone:
@@ -406,7 +433,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			return m.startExecution(m.actions, nil)
+			return m.startExecution(m.buildExecutableActions(), m.buildSkippedPullResults())
 
 		case "q", "ctrl+c":
 			m.cancel()
@@ -437,7 +464,8 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.moveConfirmCursor >= len(m.moveConfirmIndices) {
-			return m.startExecution(m.buildExecutableActions(), m.buildSkippedMoveResults())
+			initialResults := append(m.buildSkippedPullResults(), m.buildSkippedMoveResults()...)
+			return m.startExecution(m.buildExecutableActions(), initialResults)
 		}
 		return m, nil
 
@@ -596,11 +624,22 @@ func (m SyncModel) buildPlanContent() string {
 	sb.WriteString(SectionHeader("Plan"))
 	sb.WriteString("\n\n  ")
 	sb.WriteString(CountDisplay(m.updates, m.moves, m.clones))
+	if m.skippedPulls > 0 {
+		if m.updates > 0 || m.moves > 0 || m.clones > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%s %s",
+			SuccessStyle.Render(fmt.Sprintf("%d", m.skippedPulls)),
+			LabelStyle.Render("pulls skipped"),
+		))
+	}
 	sb.WriteString("\n")
 
-	// Already synced summary
 	if m.updates > 0 {
-		sb.WriteString(fmt.Sprintf("\n    %s %s\n", Checkmark(), DimStyle.Render(fmt.Sprintf("%d repos already in sync", m.updates))))
+		sb.WriteString(fmt.Sprintf("\n    %s\n", DimStyle.Render(fmt.Sprintf("%d repos will get a git pull --rebase", m.updates))))
+	}
+	if m.skippedPulls > 0 {
+		sb.WriteString(fmt.Sprintf("    %s %s\n", Checkmark(), DimStyle.Render(fmt.Sprintf("%d repos are already in the expected location (pull skipped)", m.skippedPulls))))
 	}
 	if m.moves > 0 {
 		sb.WriteString("\n")

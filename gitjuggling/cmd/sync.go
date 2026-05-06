@@ -15,6 +15,7 @@ var (
 	syncDryRun      bool
 	syncInteractive bool
 	syncPrune       bool
+	syncSkipPull    bool
 	syncConcurrency int
 )
 
@@ -30,6 +31,7 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be done without making changes")
 	syncCmd.Flags().BoolVar(&syncInteractive, "interactive", true, "prompt before destructive actions")
 	syncCmd.Flags().BoolVar(&syncPrune, "prune", false, "prune local repos that have no upstream match")
+	syncCmd.Flags().BoolVar(&syncSkipPull, "skip-pull", false, "skip git pull for repos already in the expected location")
 	syncCmd.Flags().IntVarP(&syncConcurrency, "concurrency", "c", 2, "concurrency limit for parallel operations")
 
 	rootCmd.AddCommand(syncCmd)
@@ -58,7 +60,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving workspace: %w", err)
 	}
 
-	model := tui.NewSyncModel(workspaceName, ws, syncDryRun, syncInteractive, syncPrune, syncConcurrency)
+	model := tui.NewSyncModel(workspaceName, ws, syncDryRun, syncInteractive, syncPrune, syncSkipPull, syncConcurrency)
 
 	p := tea.NewProgram(model)
 	finalModel, err := p.Run()
