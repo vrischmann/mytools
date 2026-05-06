@@ -56,6 +56,7 @@ type syncPhase int
 const (
 	syncPhaseLoading syncPhase = iota
 	syncPhasePlan
+	syncPhaseMoveConfirm
 	syncPhaseExecuting
 	syncPhaseSummary
 	syncPhasePruneList
@@ -99,6 +100,11 @@ type SyncModel struct {
 	moves    int
 	clones   int
 
+	// Move confirmation phase
+	moveConfirmIndices []int
+	moveConfirmCursor  int
+	skippedMoveIndices map[int]bool
+
 	// Execution phase
 	completed   int
 	total       int
@@ -123,7 +129,6 @@ type SyncModel struct {
 	height int
 	ctx    context.Context
 	cancel context.CancelFunc
-
 }
 
 type loadingStep struct {
@@ -204,6 +209,84 @@ func (m SyncModel) waitForActionResult() tea.Cmd {
 		}
 		return syncActionResultMsg{result: r}
 	}
+}
+
+func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []execute.ActionResult) (tea.Model, tea.Cmd) {
+	m.phase = syncPhaseExecuting
+	m.total = len(actions) + len(initialResults)
+	m.completed = len(initialResults)
+	m.execResults = append([]execute.ActionResult(nil), initialResults...)
+	m.execLog = nil
+	for _, result := range initialResults {
+		m.execLog = append(m.execLog, formatActionResult(result))
+	}
+	m.succeeded = nil
+	m.failed = nil
+
+	if len(actions) == 0 {
+		return m.finishExecution()
+	}
+
+	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency)
+	return m, m.waitForActionResult()
+}
+
+func (m SyncModel) buildExecutableActions() []syncplan.Action {
+	if len(m.skippedMoveIndices) == 0 {
+		return m.actions
+	}
+
+	actions := make([]syncplan.Action, 0, len(m.actions)-len(m.skippedMoveIndices))
+	for i, action := range m.actions {
+		if action.Type == syncplan.ActionMove && m.skippedMoveIndices[i] {
+			continue
+		}
+		actions = append(actions, action)
+	}
+	return actions
+}
+
+func (m SyncModel) buildSkippedMoveResults() []execute.ActionResult {
+	if len(m.skippedMoveIndices) == 0 {
+		return nil
+	}
+
+	results := make([]execute.ActionResult, 0, len(m.skippedMoveIndices))
+	for i, action := range m.actions {
+		if action.Type != syncplan.ActionMove || !m.skippedMoveIndices[i] {
+			continue
+		}
+
+		results = append(results, execute.ActionResult{
+			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
+			Path:        action.CurrentPath,
+			Success:     true,
+			Message:     "skipped (user declined)",
+		})
+	}
+	return results
+}
+
+func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
+	for _, r := range m.execResults {
+		if r.Success {
+			m.succeeded = append(m.succeeded, r)
+		} else {
+			m.failed = append(m.failed, r)
+		}
+	}
+
+	if m.doPrune {
+		allRemote := append(m.githubRepos, m.forgejoRepos...)
+		m.orphans = prune.FindOrphans(m.localRepos, allRemote)
+		if len(m.orphans) > 0 {
+			m.phase = syncPhasePruneList
+			return m, nil
+		}
+	}
+
+	m.phase = syncPhaseSummary
+	return m, tea.Quit
 }
 
 // ---------------------------------------------------------------------------
@@ -297,26 +380,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.execLog = append(m.execLog, formatActionResult(msg.result))
 
 		if m.completed >= m.total {
-			// Partition results
-			for _, r := range m.execResults {
-				if r.Success {
-					m.succeeded = append(m.succeeded, r)
-				} else {
-					m.failed = append(m.failed, r)
-				}
-			}
-
-			if m.doPrune {
-				allRemote := append(m.githubRepos, m.forgejoRepos...)
-				m.orphans = prune.FindOrphans(m.localRepos, allRemote)
-				if len(m.orphans) > 0 {
-					m.phase = syncPhasePruneList
-					return m, nil
-				}
-			}
-
-			m.phase = syncPhaseSummary
-			return m, tea.Quit
+			return m.finishExecution()
 		}
 		return m, m.waitForActionResult()
 	}
@@ -329,28 +393,20 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case syncPhasePlan:
 		switch msg.String() {
 		case "enter":
-			// Execute the plan
-			m.phase = syncPhaseExecuting
-			m.total = len(m.actions)
-			m.completed = 0
-
-			var confirmFn execute.ConfirmFunc
-			if m.interactive {
-				confirmFn = func(prompt string) bool {
-					p := tea.NewProgram(NewConfirmModel(prompt, ""))
-					finalModel, err := p.Run()
-					if err != nil {
-						return false
+			if m.interactive && !m.dryRun && m.moves > 0 {
+				m.phase = syncPhaseMoveConfirm
+				m.moveConfirmIndices = m.moveConfirmIndices[:0]
+				for i, action := range m.actions {
+					if action.Type == syncplan.ActionMove {
+						m.moveConfirmIndices = append(m.moveConfirmIndices, i)
 					}
-					if cm, ok := finalModel.(ConfirmModel); ok {
-						return cm.Result().Confirmed
-					}
-					return false
 				}
+				m.moveConfirmCursor = 0
+				m.skippedMoveIndices = make(map[int]bool)
+				return m, nil
 			}
 
-			m.execCh = execute.ExecuteActions(m.ctx, m.actions, m.dryRun, confirmFn, m.concurrency)
-			return m, tea.Batch(m.waitForActionResult())
+			return m.startExecution(m.actions, nil)
 
 		case "q", "ctrl+c":
 			m.cancel()
@@ -361,6 +417,29 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
+
+	case syncPhaseMoveConfirm:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.moveConfirmCursor++
+		case "n", "N":
+			if m.moveConfirmCursor < len(m.moveConfirmIndices) {
+				m.skippedMoveIndices[m.moveConfirmIndices[m.moveConfirmCursor]] = true
+			}
+			m.moveConfirmCursor++
+		case "a", "A":
+			m.moveConfirmCursor = len(m.moveConfirmIndices)
+		case "q", "esc", "ctrl+c":
+			m.phase = syncPhasePlan
+			return m, nil
+		default:
+			return m, nil
+		}
+
+		if m.moveConfirmCursor >= len(m.moveConfirmIndices) {
+			return m.startExecution(m.buildExecutableActions(), m.buildSkippedMoveResults())
+		}
+		return m, nil
 
 	case syncPhaseExecuting:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
@@ -442,6 +521,8 @@ func (m SyncModel) View() string {
 		return m.renderLoading()
 	case syncPhasePlan:
 		return m.renderPlan()
+	case syncPhaseMoveConfirm:
+		return m.renderMoveConfirm()
 	case syncPhaseExecuting:
 		return m.renderExecuting()
 	case syncPhaseSummary:
@@ -488,6 +569,27 @@ func (m SyncModel) renderPlan() string {
 	return m.viewport.View()
 }
 
+func (m SyncModel) renderMoveConfirm() string {
+	if m.moveConfirmCursor >= len(m.moveConfirmIndices) {
+		return ""
+	}
+
+	action := m.actions[m.moveConfirmIndices[m.moveConfirmCursor]]
+	current := m.moveConfirmCursor + 1
+	total := len(m.moveConfirmIndices)
+
+	return fmt.Sprintf(
+		"%s\n\n  Move %s/%s (%s)?\n\n    %s\n    %s\n\n  %s\n",
+		SectionHeader(fmt.Sprintf("Confirm move %d/%d", current, total)),
+		action.Repo.Owner,
+		action.Repo.Name,
+		action.Repo.SourceLabel(),
+		DimStyle.Render(action.CurrentPath),
+		DimStyle.Render("→ "+action.ExpectedPath),
+		DimStyle.Render("[y] Move  [n] Skip  [a] Move all remaining  [q] Cancel"),
+	)
+}
+
 func (m SyncModel) buildPlanContent() string {
 	var sb strings.Builder
 
@@ -496,14 +598,9 @@ func (m SyncModel) buildPlanContent() string {
 	sb.WriteString(CountDisplay(m.updates, m.moves, m.clones))
 	sb.WriteString("\n")
 
-	// Group actions by type
+	// Already synced summary
 	if m.updates > 0 {
-		sb.WriteString("\n")
-		for _, a := range m.actions {
-			if a.Type == syncplan.ActionUpdate {
-				sb.WriteString(fmt.Sprintf("    %s %s/%s (%s)\n", Checkmark(), a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel()))
-			}
-		}
+		sb.WriteString(fmt.Sprintf("\n    %s %s\n", Checkmark(), DimStyle.Render(fmt.Sprintf("%d repos already in sync", m.updates))))
 	}
 	if m.moves > 0 {
 		sb.WriteString("\n")

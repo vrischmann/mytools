@@ -168,7 +168,7 @@ func CountDisplay(updates, moves, clones int) string {
 	if updates > 0 {
 		parts = append(parts, fmt.Sprintf("%s %s",
 			SuccessStyle.Render(fmt.Sprintf("%d", updates)),
-			LabelStyle.Render("to update"),
+			LabelStyle.Render("up to date"),
 		))
 	}
 	if moves > 0 {
