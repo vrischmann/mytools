@@ -46,7 +46,7 @@ func httpsToSSH(url string) string {
 // forgejoToken retrieves a Forgejo token by reading the given 1Password secret reference.
 // The secretRef should be an "op://..." URI; this function hardcodes "op read" to execute it.
 func forgejoToken(secretRef string) (string, error) {
-	out, err := exec.Command("op", "read", secretRef).Output()
+	out, err := exec.Command("op", "read", "--account", "my.1password.eu", secretRef).Output()
 	if err != nil {
 		return "", fmt.Errorf("op read failed for %q: %w", secretRef, err)
 	}
