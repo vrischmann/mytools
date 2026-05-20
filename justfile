@@ -16,21 +16,19 @@ test-all:
 clean:
     @cargo clean
 
-# Install all workspace binaries
-install-all:
-    @echo "Installing gitjuggling..."
-    @cargo install --path gitjuggling
-    @echo "Installing git-stacked..."
+# Install all Rust workspace binaries
+cargo-install-all:
     @cargo install --path git-stacked
-    @echo "Installing cargo-target-clean..."
     @cargo install --path cargo-target-clean
-    @echo "Installing git-journal..."
     @cargo install --path git-journal
-    @echo "Installing zoekt-reindex..."
     @cargo install --path zoekt-reindex
-    @echo "Installing ansible-password-agent..."
     @cargo install --path ansible-password-agent
 
+# Install Go project
+go-install-all:
+    cd gitjuggling && go install .
+# Install all workspace binaries
+install-all: cargo-install-all go-install-all
 # Show available modules
 list-modules:
     @echo "Available modules:"
