@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +23,20 @@ type Workspace struct {
 	ForgejoUser  string   `yaml:"forgejo_user"`
 	ForgejoToken string   `yaml:"forgejo_token"`
 	Rules        Rules    `yaml:"rules"`
+	Ignore       []string `yaml:"ignore"`
+}
+
+// IsIgnored checks whether a repo name matches any entry in the ignore list.
+// Each entry is matched as a glob pattern against the repo name only.
+// If the ignore list is empty, this always returns false.
+func (ws *Workspace) IsIgnored(name string) bool {
+	for _, pattern := range ws.Ignore {
+		matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 // Rules defines where different categories of repos should be placed.

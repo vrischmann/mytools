@@ -225,3 +225,51 @@ func TestBuildPlanClash(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPlanIgnoreExact(t *testing.T) {
+	ws := testWorkspace()
+	ws.Ignore = []string{"dotfiles"}
+
+	repo1 := makeRepo("dotfiles", "owner", false, false)
+	repo2 := makeRepo("myproject", "owner", false, false)
+	local := discover.NewLocalRepos(nil)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Repo.Name != "myproject" {
+		t.Errorf("expected myproject, got %s", actions[0].Repo.Name)
+	}
+}
+
+func TestBuildPlanIgnoreGlob(t *testing.T) {
+	ws := testWorkspace()
+	ws.Ignore = []string{"temp-*"}
+
+	repo1 := makeRepo("temp-experiment", "owner", false, false)
+	repo2 := makeRepo("real-project", "owner", false, false)
+	local := discover.NewLocalRepos(nil)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Repo.Name != "real-project" {
+		t.Errorf("expected real-project, got %s", actions[0].Repo.Name)
+	}
+}
+
+func TestBuildPlanIgnoreAll(t *testing.T) {
+	ws := testWorkspace()
+	ws.Ignore = []string{"*"}
+
+	repo1 := makeRepo("repo1", "owner", false, false)
+	repo2 := makeRepo("repo2", "owner", false, false)
+	local := discover.NewLocalRepos(nil)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
+	if len(actions) != 0 {
+		t.Fatalf("expected 0 actions, got %d", len(actions))
+	}
+}

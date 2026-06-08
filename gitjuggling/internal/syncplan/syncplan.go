@@ -61,6 +61,15 @@ func rulesBaseDir(repo *remote.RemoteRepo, ws *config.Workspace) string {
 // BuildPlan determines the action for each remote repo by matching against
 // locally discovered repos.
 func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws *config.Workspace) []Action {
+	// Filter out ignored repos.
+	var filtered []*remote.RemoteRepo
+	for _, repo := range remoteRepos {
+		if !ws.IsIgnored(repo.Name) {
+			filtered = append(filtered, repo)
+		}
+	}
+	remoteRepos = filtered
+
 	// Detect name clashes: repos with the same Name+rules category
 	// share the same target directory name.
 	type nameKey struct {

@@ -104,6 +104,68 @@ workspace:
 	require.Error(t, err)
 }
 
+func TestParseConfigWithIgnore(t *testing.T) {
+	input := `
+workspace:
+  personal:
+    root: /home/user/dev
+    github_owners: [vrischmann]
+    ignore:
+      - dotfiles
+      - "temp-*"
+    rules:
+      base: /home/user/dev/repos
+`
+	cfg, err := parseYAML(input)
+	require.NoError(t, err)
+
+	ws := cfg.Workspaces["personal"]
+	require.Equal(t, []string{"dotfiles", "temp-*"}, ws.Ignore)
+}
+
+func TestIsIgnored(t *testing.T) {
+	ws := &Workspace{
+		Ignore: []string{"dotfiles", "temp-*", "test?repo"},
+	}
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		// Exact match
+		{"dotfiles", true},
+		{"Dotfiles", true}, // case-insensitive
+		{"my-dotfiles", false},
+
+		// Glob pattern
+		{"temp-foo", true},
+		{"temp-bar-baz", true},
+		{"TEMP-xyz", true}, // case-insensitive
+		{"temp", false},    // partial match doesn't count
+
+		// Glob with ?
+		{"test-repo", true},
+		{"testXrepo", true},
+		{"testXXrepo", false},
+
+		// No match
+		{"myproject", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ws.IsIgnored(tt.name)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsIgnoredEmpty(t *testing.T) {
+	ws := &Workspace{}
+	require.False(t, ws.IsIgnored("anything"))
+}
+
 // parseYAML is a test helper that parses a YAML string into a Config.
 func parseYAML(input string) (*Config, error) {
 	var cfg Config

@@ -294,7 +294,7 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 
 	if m.doPrune {
 		allRemote := append(m.githubRepos, m.forgejoRepos...)
-		m.orphans = prune.FindOrphans(m.localRepos, allRemote)
+		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
 		if len(m.orphans) > 0 {
 			m.phase = syncPhasePruneList
 			return m, nil

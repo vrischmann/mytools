@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 )
@@ -27,7 +28,8 @@ type PruneResult struct {
 type ConfirmFunc func(prompt string) bool
 
 // FindOrphans finds local repos that have no matching upstream remote.
-func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo) []*OrphanRepo {
+// Repos whose directory name matches the workspace ignore list are excluded.
+func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo, ws *config.Workspace) []*OrphanRepo {
 	// Build a set of normalized remote URLs for fast lookup
 	remoteURLs := make(map[string]struct{}, len(remoteRepos))
 	for _, r := range remoteRepos {
@@ -37,6 +39,13 @@ func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo) [
 	var orphans []*OrphanRepo
 
 	for _, repo := range local.Iter() {
+		name := filepath.Base(repo.Path)
+
+		// Skip ignored repos.
+		if ws.IsIgnored(name) {
+			continue
+		}
+
 		hasMatch := false
 		for _, url := range repo.RemoteURLs {
 			if _, ok := remoteURLs[discover.NormalizeURL(url)]; ok {
@@ -46,7 +55,6 @@ func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo) [
 		}
 
 		if !hasMatch {
-			name := filepath.Base(repo.Path)
 			orphans = append(orphans, &OrphanRepo{
 				Path: repo.Path,
 				Name: name,
