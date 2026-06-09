@@ -20,6 +20,82 @@ type ActionResult struct {
 	Message     string
 }
 
+// IsNoTrackingError returns true if the error message indicates a missing
+// upstream/tracking branch.
+func IsNoTrackingError(msg string) bool {
+	return strings.Contains(msg, "no tracking information") ||
+		strings.Contains(msg, "There is no tracking information")
+}
+
+// GetCurrentBranch returns the current branch name for a git repo.
+func GetCurrentBranch(localPath string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = localPath
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w", err)
+	}
+	branch := strings.TrimSpace(string(output))
+	if branch == "HEAD" {
+		return "", fmt.Errorf("repository is in detached HEAD state")
+	}
+	return branch, nil
+}
+
+// RemoteBranchExists checks whether a branch exists on the given remote.
+func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
+	cmd := exec.Command("git", "ls-remote", "--heads", remoteName)
+	cmd.Dir = localPath
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git ls-remote failed: %w", err)
+	}
+	target := fmt.Sprintf("refs/heads/%s", branch)
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), target) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SetUpstreamAndPull sets the upstream tracking branch and runs git pull --rebase.
+func SetUpstreamAndPull(localPath, remoteName, branch string) ActionResult {
+	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
+
+	// git branch --set-upstream-to=origin/<branch> <branch>
+	upstream := fmt.Sprintf("%s/%s", remoteName, branch)
+	cmd := exec.Command("git", "branch", "--set-upstream-to", upstream, branch)
+	cmd.Dir = localPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git branch --set-upstream-to failed: %s", strings.TrimSpace(string(output))),
+		}
+	}
+
+	// git pull --rebase
+	pullCmd := exec.Command("git", "pull", "--rebase")
+	pullCmd.Dir = localPath
+	if output, err := pullCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git pull --rebase failed: %s", strings.TrimSpace(string(output))),
+		}
+	}
+
+	return ActionResult{
+		Description: desc,
+		Path:        localPath,
+		Success:     true,
+		Message:     "updated (tracking set to " + upstream + ")",
+	}
+}
+
 // ConfirmFunc is a callback for interactive confirmation prompts.
 // It should display the prompt and return true if the user confirms.
 type ConfirmFunc func(prompt string) bool

@@ -39,6 +39,19 @@ type syncActionResultMsg struct {
 	result execute.ActionResult
 }
 
+// trackingFixItem holds the info needed to prompt the user about
+// setting a missing upstream tracking branch.
+type trackingFixItem struct {
+	Description string // e.g. "BatchLabs/lib.go.sender (github)"
+	Path        string // local repo path
+	RemoteName  string // e.g. "origin"
+	Branch      string // e.g. "feat/uj-temporal-rewrite"
+}
+
+type trackingFixResultMsg struct {
+	result execute.ActionResult
+	index  int
+}
 
 // ---------------------------------------------------------------------------
 // Phases
@@ -55,6 +68,7 @@ const (
 	syncPhasePruneList
 	syncPhasePruneConfirm
 	syncPhasePruneDone
+	syncPhaseTrackingFix
 )
 
 // ---------------------------------------------------------------------------
@@ -110,6 +124,11 @@ type SyncModel struct {
 	// Summary phase
 	succeeded []execute.ActionResult
 	failed    []execute.ActionResult
+
+	// Tracking fix phase
+	trackingFixItems   []trackingFixItem
+	trackingFixCursor  int
+	trackingFixResults []execute.ActionResult
 
 	// Prune
 	orphans      []*prune.OrphanRepo
@@ -292,6 +311,48 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Detect "no tracking information" failures and offer to fix them.
+	for _, r := range m.failed {
+		if !execute.IsNoTrackingError(r.Message) {
+			continue
+		}
+		branch, err := execute.GetCurrentBranch(r.Path)
+		if err != nil {
+			continue
+		}
+		exists, err := execute.RemoteBranchExists(r.Path, "origin", branch)
+		if err != nil || !exists {
+			continue
+		}
+		m.trackingFixItems = append(m.trackingFixItems, trackingFixItem{
+			Description: r.Description,
+			Path:        r.Path,
+			RemoteName:  "origin",
+			Branch:      branch,
+		})
+	}
+
+	if len(m.trackingFixItems) > 0 {
+		// Remove tracking-fixable items from the failed list
+		// so they don't show in the summary before resolution.
+		fixable := make(map[string]bool)
+		for _, item := range m.trackingFixItems {
+			fixable[item.Path] = true
+		}
+		var remaining []execute.ActionResult
+		for _, r := range m.failed {
+			if !fixable[r.Path] {
+				remaining = append(remaining, r)
+			}
+		}
+		m.failed = remaining
+
+		m.phase = syncPhaseTrackingFix
+		m.trackingFixCursor = 0
+		m.trackingFixResults = nil
+		return m, nil
+	}
+
 	if m.doPrune {
 		allRemote := append(m.githubRepos, m.forgejoRepos...)
 		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
@@ -403,6 +464,19 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.finishExecution()
 		}
 		return m, m.waitForActionResult()
+
+	case trackingFixResultMsg:
+		m.trackingFixResults = append(m.trackingFixResults, msg.result)
+		if msg.result.Success {
+			m.succeeded = append(m.succeeded, msg.result)
+		} else {
+			m.failed = append(m.failed, msg.result)
+		}
+		m.trackingFixCursor++
+		if m.trackingFixCursor >= len(m.trackingFixItems) {
+			return m.afterTrackingFix()
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -461,6 +535,48 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.startExecution(m.buildExecutableActions(), initialResults)
 		}
 		return m, nil
+
+	case syncPhaseTrackingFix:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			item := m.trackingFixItems[m.trackingFixCursor]
+			result := execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch)
+			result.Description = item.Description
+			if result.Success {
+				m.succeeded = append(m.succeeded, result)
+			} else {
+				m.failed = append(m.failed, result)
+			}
+			m.trackingFixCursor++
+			if m.trackingFixCursor >= len(m.trackingFixItems) {
+				return m.afterTrackingFix()
+			}
+			return m, nil
+		case "n", "N":
+			item := m.trackingFixItems[m.trackingFixCursor]
+			m.failed = append(m.failed, execute.ActionResult{
+				Description: item.Description,
+				Path:        item.Path,
+				Success:     false,
+				Message:     "no tracking branch (user declined fix)",
+			})
+			m.trackingFixCursor++
+			if m.trackingFixCursor >= len(m.trackingFixItems) {
+				return m.afterTrackingFix()
+			}
+			return m, nil
+		case "q", "ctrl+c":
+			for i := m.trackingFixCursor; i < len(m.trackingFixItems); i++ {
+				item := m.trackingFixItems[i]
+				m.failed = append(m.failed, execute.ActionResult{
+					Description: item.Description,
+					Path:        item.Path,
+					Success:     false,
+					Message:     "no tracking branch (skipped)",
+				})
+			}
+			return m.afterTrackingFix()
+		}
 
 	case syncPhaseExecuting:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
@@ -546,6 +662,8 @@ func (m SyncModel) View() string {
 		return m.renderMoveConfirm()
 	case syncPhaseExecuting:
 		return m.renderExecuting()
+	case syncPhaseTrackingFix:
+		return m.renderTrackingFix()
 	case syncPhaseSummary:
 		return m.renderSummary()
 	case syncPhasePruneList:
@@ -686,6 +804,32 @@ func (m SyncModel) renderExecuting() string {
 	return sb.String()
 }
 
+func (m SyncModel) renderTrackingFix() string {
+	if m.trackingFixCursor >= len(m.trackingFixItems) {
+		return ""
+	}
+
+	item := m.trackingFixItems[m.trackingFixCursor]
+	current := m.trackingFixCursor + 1
+	total := len(m.trackingFixItems)
+
+	// Show results of previous fixes
+	var prevResults strings.Builder
+	for _, r := range m.trackingFixResults {
+		prevResults.WriteString(formatActionResult(r))
+		prevResults.WriteString("\n")
+	}
+
+	return fmt.Sprintf(
+		"%s\n\n  %s\n\n    %s\n\n    %s\n\n  %s\n",
+		SectionHeader(fmt.Sprintf("Fix tracking branch %d/%d", current, total)),
+		fmt.Sprintf("%s has no upstream tracking branch.", ErrorStyle.Render(item.Description)),
+		fmt.Sprintf("Set upstream to %s and pull?", SuccessStyle.Render(fmt.Sprintf("%s/%s", item.RemoteName, item.Branch))),
+		DimStyle.Render(fmt.Sprintf("git branch --set-upstream-to=%s/%s %s", item.RemoteName, item.Branch, item.Branch)),
+		DimStyle.Render("[y] Fix and pull  [n] Skip  [q] Skip all remaining"),
+	)
+}
+
 func (m SyncModel) renderSummary() string {
 	if m.loadErr != nil {
 		return fmt.Sprintf("  %s %v\n", CrossMark(), m.loadErr)
@@ -813,6 +957,19 @@ func formatActionResult(r execute.ActionResult) string {
 	default:
 		return fmt.Sprintf("  %s %-30s %s", CrossMark(), r.Description, ErrorStyle.Render(r.Message))
 	}
+}
+
+func (m SyncModel) afterTrackingFix() (tea.Model, tea.Cmd) {
+	if m.doPrune {
+		allRemote := append(m.githubRepos, m.forgejoRepos...)
+		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
+		if len(m.orphans) > 0 {
+			m.phase = syncPhasePruneList
+			return m, nil
+		}
+	}
+	m.phase = syncPhaseSummary
+	return m, tea.Quit
 }
 
 // HasFailures returns true if any action or prune failed.
