@@ -27,6 +27,12 @@ func IsNoTrackingError(msg string) bool {
 		strings.Contains(msg, "There is no tracking information")
 }
 
+// IsStaleUpstreamError returns true if the error message indicates that the
+// configured upstream ref no longer exists on the remote.
+func IsStaleUpstreamError(msg string) bool {
+	return strings.Contains(msg, "no such ref was fetched")
+}
+
 // GetCurrentBranch returns the current branch name for a git repo.
 func GetCurrentBranch(localPath string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
@@ -40,6 +46,39 @@ func GetCurrentBranch(localPath string) (string, error) {
 		return "", fmt.Errorf("repository is in detached HEAD state")
 	}
 	return branch, nil
+}
+
+// GetDefaultBranch returns the default branch of the remote (e.g. "main").
+func GetDefaultBranch(localPath, remoteName string) (string, error) {
+	ref := fmt.Sprintf("refs/remotes/%s/HEAD", remoteName)
+	cmd := exec.Command("git", "symbolic-ref", "--short", ref)
+	cmd.Dir = localPath
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git symbolic-ref failed: %w", err)
+	}
+	short := strings.TrimSpace(string(output))
+	prefix := remoteName + "/"
+	if !strings.HasPrefix(short, prefix) {
+		return "", fmt.Errorf("unexpected default ref %q", short)
+	}
+	return strings.TrimPrefix(short, prefix), nil
+}
+
+// IsBranchMerged reports whether branch has been merged into base.
+func IsBranchMerged(localPath, branch, base string) (bool, error) {
+	cmd := exec.Command("git", "branch", "--merged", base, "--format=%(refname:short)")
+	cmd.Dir = localPath
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git branch --merged failed: %w", err)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.TrimSpace(line) == branch {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // RemoteBranchExists checks whether a branch exists on the given remote.
@@ -80,6 +119,91 @@ func PushAndSetUpstream(localPath, remoteName, branch string) ActionResult {
 		Path:        localPath,
 		Success:     true,
 		Message:     fmt.Sprintf("pushed (tracking set to %s/%s)", remoteName, branch),
+	}
+}
+
+// ResolveStaleUpstream handles the case where the local branch tracks a
+// remote ref that no longer exists. It checks out the default branch,
+// pulls, and deletes the stale branch if it has been merged.
+func ResolveStaleUpstream(localPath, remoteName, staleBranch string) ActionResult {
+	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
+
+	defaultBranch, err := GetDefaultBranch(localPath, remoteName)
+	if err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("could not determine default branch: %v", err),
+		}
+	}
+
+	if staleBranch == defaultBranch {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("stale upstream on default branch %q — refusing to delete", defaultBranch),
+		}
+	}
+
+	checkoutCmd := exec.Command("git", "checkout", defaultBranch)
+	checkoutCmd.Dir = localPath
+	if output, err := checkoutCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git checkout %s failed: %s", defaultBranch, strings.TrimSpace(string(output))),
+		}
+	}
+
+	pullCmd := exec.Command("git", "pull", "--rebase")
+	pullCmd.Dir = localPath
+	if output, err := pullCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git pull --rebase failed: %s", strings.TrimSpace(string(output))),
+		}
+	}
+
+	merged, err := IsBranchMerged(localPath, staleBranch, defaultBranch)
+	if err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("could not check merge status of %s: %v", staleBranch, err),
+		}
+	}
+
+	if !merged {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     true,
+			Message:     fmt.Sprintf("switched to %s and pulled (kept %s — not merged)", defaultBranch, staleBranch),
+		}
+	}
+
+	deleteCmd := exec.Command("git", "branch", "-d", staleBranch)
+	deleteCmd.Dir = localPath
+	if output, err := deleteCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git branch -d %s failed: %s", staleBranch, strings.TrimSpace(string(output))),
+		}
+	}
+
+	return ActionResult{
+		Description: desc,
+		Path:        localPath,
+		Success:     true,
+		Message:     fmt.Sprintf("switched to %s, pulled, deleted merged branch %s", defaultBranch, staleBranch),
 	}
 }
 

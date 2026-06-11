@@ -49,6 +49,10 @@ const (
 	// trackingFixPushUpstream creates the remote branch with git push -u,
 	// which also sets the upstream tracking branch.
 	trackingFixPushUpstream
+	// trackingFixStaleUpstream resolves a local branch tracking a deleted
+	// remote ref by switching to the default branch, pulling, and deleting
+	// the stale local branch if it has been merged.
+	trackingFixStaleUpstream
 )
 
 // trackingFixItem holds the info needed to prompt the user about
@@ -324,25 +328,34 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Detect "no tracking information" failures and offer to fix them.
+	// Detect tracking-related failures and offer to fix them.
 	for _, r := range m.failed {
-		if !execute.IsNoTrackingError(r.Message) {
+		isStale := execute.IsStaleUpstreamError(r.Message)
+		isMissing := execute.IsNoTrackingError(r.Message)
+		if !isStale && !isMissing {
 			continue
 		}
-		branch, err := execute.GetCurrentBranch(r.Path)
+		b, err := execute.GetCurrentBranch(r.Path)
 		if err != nil {
 			continue
 		}
-		action := trackingFixSetUpstream
-		exists, err := execute.RemoteBranchExists(r.Path, "origin", branch)
-		if err != nil || !exists {
-			action = trackingFixPushUpstream
+		var action trackingFixAction
+		switch {
+		case isStale:
+			action = trackingFixStaleUpstream
+		default:
+			exists, err := execute.RemoteBranchExists(r.Path, "origin", b)
+			if err != nil || !exists {
+				action = trackingFixPushUpstream
+			} else {
+				action = trackingFixSetUpstream
+			}
 		}
 		m.trackingFixItems = append(m.trackingFixItems, trackingFixItem{
 			Description: r.Description,
 			Path:        r.Path,
 			RemoteName:  "origin",
-			Branch:      branch,
+			Branch:      b,
 			Action:      action,
 		})
 	}
@@ -559,6 +572,8 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch item.Action {
 			case trackingFixPushUpstream:
 				result = execute.PushAndSetUpstream(item.Path, item.RemoteName, item.Branch)
+			case trackingFixStaleUpstream:
+				result = execute.ResolveStaleUpstream(item.Path, item.RemoteName, item.Branch)
 			default:
 				result = execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch)
 			}
@@ -841,14 +856,22 @@ func (m SyncModel) renderTrackingFix() string {
 		prevResults.WriteString("\n")
 	}
 
-	var question, command string
+	var problem, question, command string
 	switch item.Action {
 	case trackingFixPushUpstream:
+		problem = fmt.Sprintf("%s has no upstream tracking branch.", ErrorStyle.Render(item.Description))
 		question = fmt.Sprintf("Push %s to %s and set upstream?",
 			SuccessStyle.Render(item.Branch),
 			SuccessStyle.Render(item.RemoteName))
 		command = fmt.Sprintf("git push -u %s %s", item.RemoteName, item.Branch)
+	case trackingFixStaleUpstream:
+		problem = fmt.Sprintf("%s tracks a remote ref that no longer exists.", ErrorStyle.Render(item.Description))
+		question = fmt.Sprintf("Switch off %s, pull default branch, and delete %s if merged?",
+			SuccessStyle.Render(item.Branch),
+			SuccessStyle.Render(item.Branch))
+		command = "git checkout <default> && git pull --rebase && git branch -d " + item.Branch
 	default:
+		problem = fmt.Sprintf("%s has no upstream tracking branch.", ErrorStyle.Render(item.Description))
 		question = fmt.Sprintf("Set upstream to %s and pull?",
 			SuccessStyle.Render(fmt.Sprintf("%s/%s", item.RemoteName, item.Branch)))
 		command = fmt.Sprintf("git branch --set-upstream-to=%s/%s %s", item.RemoteName, item.Branch, item.Branch)
@@ -857,7 +880,7 @@ func (m SyncModel) renderTrackingFix() string {
 	return fmt.Sprintf(
 		"%s\n\n  %s\n\n    %s\n\n    %s\n\n  %s\n",
 		SectionHeader(fmt.Sprintf("Fix tracking branch %d/%d", current, total)),
-		fmt.Sprintf("%s has no upstream tracking branch.", ErrorStyle.Render(item.Description)),
+		problem,
 		question,
 		DimStyle.Render(command),
 		DimStyle.Render("[y] Fix  [n] Skip  [q] Skip all remaining"),
