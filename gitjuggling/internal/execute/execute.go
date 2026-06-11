@@ -59,6 +59,30 @@ func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
 	return false, nil
 }
 
+// PushAndSetUpstream pushes the current branch to the remote with -u,
+// creating the remote branch and setting the upstream tracking branch.
+func PushAndSetUpstream(localPath, remoteName, branch string) ActionResult {
+	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
+
+	cmd := exec.Command("git", "push", "-u", remoteName, branch)
+	cmd.Dir = localPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        localPath,
+			Success:     false,
+			Message:     fmt.Sprintf("git push -u failed: %s", strings.TrimSpace(string(output))),
+		}
+	}
+
+	return ActionResult{
+		Description: desc,
+		Path:        localPath,
+		Success:     true,
+		Message:     fmt.Sprintf("pushed (tracking set to %s/%s)", remoteName, branch),
+	}
+}
+
 // SetUpstreamAndPull sets the upstream tracking branch and runs git pull --rebase.
 func SetUpstreamAndPull(localPath, remoteName, branch string) ActionResult {
 	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)

@@ -39,6 +39,18 @@ type syncActionResultMsg struct {
 	result execute.ActionResult
 }
 
+// trackingFixAction is the kind of fix to apply for a missing upstream.
+type trackingFixAction int
+
+const (
+	// trackingFixSetUpstream sets the upstream tracking branch to an existing
+	// remote branch and runs git pull --rebase.
+	trackingFixSetUpstream trackingFixAction = iota
+	// trackingFixPushUpstream creates the remote branch with git push -u,
+	// which also sets the upstream tracking branch.
+	trackingFixPushUpstream
+)
+
 // trackingFixItem holds the info needed to prompt the user about
 // setting a missing upstream tracking branch.
 type trackingFixItem struct {
@@ -46,6 +58,7 @@ type trackingFixItem struct {
 	Path        string // local repo path
 	RemoteName  string // e.g. "origin"
 	Branch      string // e.g. "feat/uj-temporal-rewrite"
+	Action      trackingFixAction
 }
 
 type trackingFixResultMsg struct {
@@ -320,15 +333,17 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		if err != nil {
 			continue
 		}
+		action := trackingFixSetUpstream
 		exists, err := execute.RemoteBranchExists(r.Path, "origin", branch)
 		if err != nil || !exists {
-			continue
+			action = trackingFixPushUpstream
 		}
 		m.trackingFixItems = append(m.trackingFixItems, trackingFixItem{
 			Description: r.Description,
 			Path:        r.Path,
 			RemoteName:  "origin",
 			Branch:      branch,
+			Action:      action,
 		})
 	}
 
@@ -540,7 +555,13 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y", "enter":
 			item := m.trackingFixItems[m.trackingFixCursor]
-			result := execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch)
+			var result execute.ActionResult
+			switch item.Action {
+			case trackingFixPushUpstream:
+				result = execute.PushAndSetUpstream(item.Path, item.RemoteName, item.Branch)
+			default:
+				result = execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch)
+			}
 			result.Description = item.Description
 			if result.Success {
 				m.succeeded = append(m.succeeded, result)
@@ -820,13 +841,26 @@ func (m SyncModel) renderTrackingFix() string {
 		prevResults.WriteString("\n")
 	}
 
+	var question, command string
+	switch item.Action {
+	case trackingFixPushUpstream:
+		question = fmt.Sprintf("Push %s to %s and set upstream?",
+			SuccessStyle.Render(item.Branch),
+			SuccessStyle.Render(item.RemoteName))
+		command = fmt.Sprintf("git push -u %s %s", item.RemoteName, item.Branch)
+	default:
+		question = fmt.Sprintf("Set upstream to %s and pull?",
+			SuccessStyle.Render(fmt.Sprintf("%s/%s", item.RemoteName, item.Branch)))
+		command = fmt.Sprintf("git branch --set-upstream-to=%s/%s %s", item.RemoteName, item.Branch, item.Branch)
+	}
+
 	return fmt.Sprintf(
 		"%s\n\n  %s\n\n    %s\n\n    %s\n\n  %s\n",
 		SectionHeader(fmt.Sprintf("Fix tracking branch %d/%d", current, total)),
 		fmt.Sprintf("%s has no upstream tracking branch.", ErrorStyle.Render(item.Description)),
-		fmt.Sprintf("Set upstream to %s and pull?", SuccessStyle.Render(fmt.Sprintf("%s/%s", item.RemoteName, item.Branch))),
-		DimStyle.Render(fmt.Sprintf("git branch --set-upstream-to=%s/%s %s", item.RemoteName, item.Branch, item.Branch)),
-		DimStyle.Render("[y] Fix and pull  [n] Skip  [q] Skip all remaining"),
+		question,
+		DimStyle.Render(command),
+		DimStyle.Render("[y] Fix  [n] Skip  [q] Skip all remaining"),
 	)
 }
 
