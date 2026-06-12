@@ -4,7 +4,7 @@
 
 This is a Cargo workspace containing personal utility tools. Each tool is a standalone binary in its own crate.
 
-Workspace members: `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+Workspace members: `git-stacked`, `cargo-target-clean`, `git-journal`, `ansible-password-agent`.
 
 Note: `gitjuggling` was ported to Go and lives in the same directory but is built separately with `go build`.
 
@@ -34,7 +34,7 @@ cargo fmt --check --all
 cargo run --release -p <package> -- <args>
 ```
 
-Where `<package>` is one of: `git-stacked`, `cargo-target-clean`, `git-journal`, `zoekt-reindex`, `ansible-password-agent`.
+Where `<package>` is one of: `git-stacked`, `cargo-target-clean`, `git-journal`, `ansible-password-agent`.
 
 For `gitjuggling`, use Go instead:
 
@@ -56,14 +56,14 @@ A `justfile` exists with the following recipes:
 
 ## Code Style
 
-- Rust editions vary by crate: `cargo-target-clean`, `zoekt-reindex`, `ansible-password-agent` use edition 2021; `git-stacked`, `git-journal` use edition 2024
+- Rust editions vary by crate: `cargo-target-clean`, `ansible-password-agent` use edition 2021; `git-stacked`, `git-journal` use edition 2024
 - `gitjuggling` is written in Go — see `gitjuggling/` for its own build/test commands
 - Follow standard Rust formatting (`cargo fmt`)
 - Address all clippy warnings
 
 ## CI / Release
 
-A GitHub Actions workflow (`.github/workflows/release.yml`) builds and releases `zoekt-reindex` binaries on tag push (`v*`). Targets: `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`.
+A GitHub Actions workflow (`.github/workflows/release.yml`) builds and releases binaries on tag push (`v*`). Targets: `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`.
 
 ## Dependencies
 
@@ -71,14 +71,14 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 
 | Dependency | Used by | Purpose |
 |-----------|---------|---------|
-| `clap` | cargo-target-clean, git-journal, zoekt-reindex, ansible-password-agent | CLI argument parsing (derive or builder API) |
-| `anyhow` | cargo-target-clean, zoekt-reindex, ansible-password-agent | Error handling |
-| `rayon` | cargo-target-clean, zoekt-reindex | Parallel processing |
-| `jwalk` | cargo-target-clean, git-journal, zoekt-reindex | Parallel directory walking |
+| `clap` | cargo-target-clean, git-journal, ansible-password-agent | CLI argument parsing (derive or builder API) |
+| `anyhow` | cargo-target-clean, ansible-password-agent | Error handling |
+| `rayon` | cargo-target-clean | Parallel processing |
+| `jwalk` | cargo-target-clean, git-journal | Parallel directory walking |
 | `git2` | git-stacked, git-journal | Git repository operations |
 | `onlyerror` | git-stacked | Error derive macros |
 | `chrono` | git-journal | Date/time handling |
-| `serde` + `toml` | zoekt-reindex | Config file deserialization |
+| `serde` + `toml` | - | Config file deserialization |
 | `rpassword` | ansible-password-agent | Terminal password input via /dev/tty |
 | `linux-keyutils` | ansible-password-agent (Linux only) | Kernel keyring access |
 | `security-framework` | ansible-password-agent (macOS only) | Keychain Services access |
@@ -117,13 +117,6 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 - Two output formats: `journal` (markdown, default) and `plain`
 - Groups commits by date, then by category (work/personal)
 - Skips merge commits
-
-### zoekt-reindex (v0.1.0, edition 2021)
-- Requires `zoekt-git-index` binary (from zoekt sourcegraph project)
-- Config file: `~/.config/zoekt-reindex/config.toml` (also supports `--config` flag for custom path)
-- Uses `jwalk` and `rayon` for parallel repository discovery and indexing
-- CLI args override config file settings
-- Default codebase path is `~/dev/Batch`
 
 ### ansible-password-agent (v0.1.0, edition 2021)
 - Secure credential provider for Ansible vault and become passwords

@@ -21,7 +21,6 @@ cargo-install-all:
     @cargo install --path git-stacked
     @cargo install --path cargo-target-clean
     @cargo install --path git-journal
-    @cargo install --path zoekt-reindex
     @cargo install --path ansible-password-agent
 
 # Install Go project
@@ -36,5 +35,4 @@ list-modules:
     @echo "  - git-stacked"
     @echo "  - cargo-target-clean"
     @echo "  - git-journal"
-    @echo "  - zoekt-reindex"
     @echo "  - ansible-password-agent"
