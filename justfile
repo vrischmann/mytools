@@ -36,7 +36,7 @@ bump-apa version:
     @git commit -m "chore(ansible-password-agent): bump to {{version}}"
     @git tag ansible-password-agent/v{{version}}
     @echo "=> Bumped and tagged ansible-password-agent/v{{version}}"
-    @echo "=> Push with: git push --follow-tags origin main"
+    @echo "=> Push with: git push --tags origin main"
 
 # Show available modules
 list-modules:
