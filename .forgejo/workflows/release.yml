@@ -3,7 +3,7 @@ name: Release binaries
 on:
   push:
     tags:
-      - "*/v*"
+      - "v*"
 
 jobs:
   build:
@@ -15,9 +15,6 @@ jobs:
         include:
           - package: zoekt-reindex
             target: x86_64-unknown-linux-gnu
-          - package: zoekt-reindex
-            target: aarch64-apple-darwin
-            zigbuild: true
           - package: ansible-password-agent
             target: x86_64-unknown-linux-gnu
 
@@ -37,21 +34,8 @@ jobs:
       - name: Rust cache
         uses: https://github.com/Swatinem/rust-cache@v2
 
-      - name: Install zig
-        if: ${{ matrix.zigbuild }}
-        uses: https://github.com/goto-bus-stop/setup-zig@v2
-
-      - name: Install cargo-zigbuild
-        if: ${{ matrix.zigbuild }}
-        run: cargo install cargo-zigbuild
-
-      - name: Build (native)
-        if: ${{ !matrix.zigbuild }}
+      - name: Build
         run: cargo build --release --locked -p ${{ matrix.package }} --target ${{ matrix.target }}
-
-      - name: Build (cross-compile via zigbuild)
-        if: ${{ matrix.zigbuild }}
-        run: cargo zigbuild --release --locked -p ${{ matrix.package }} --target ${{ matrix.target }}
 
       - name: Package
         id: package
