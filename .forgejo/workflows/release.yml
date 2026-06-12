@@ -26,6 +26,8 @@ jobs:
         uses: https://code.forgejo.org/actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-known-hosts: ${{ vars.SSH_KNOWN_HOSTS }}
 
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
