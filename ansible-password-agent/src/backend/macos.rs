@@ -1,15 +1,17 @@
 use anyhow::{bail, Context, Result};
-use security_framework::passwords::{self, AccessControlOptions, PasswordOptions};
+use security_framework::passwords::{self, PasswordOptions};
 
 use super::PasswordBackend;
 
 /// Keychain service name used to namespace all passwords.
 const KEYCHAIN_SERVICE: &str = "ansible-password-agent";
 
-/// macOS backend using the Keychain Services API with biometric access control.
+/// macOS backend using the Keychain Services API.
 ///
-/// Passwords are stored permanently in the Keychain but protected by
-/// macOS access controls (Touch ID / Face ID / device password).
+/// Passwords are stored permanently in the Keychain, encrypted at rest
+/// with hardware-backed keys (Secure Enclave on Apple Silicon).
+/// No per-access biometric gate is used, as the data protection keychain
+/// requires entitlements not available to CLI tools.
 pub struct MacOSBackend;
 
 impl PasswordBackend for MacOSBackend {
@@ -41,9 +43,6 @@ impl PasswordBackend for MacOSBackend {
 
     fn set(key: &str, secret: &str) -> Result<()> {
         let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, key);
-
-        // Require biometric (Touch ID / Face ID) or device password.
-        options.set_access_control_options(AccessControlOptions::USER_PRESENCE);
 
         // Disable iCloud sync — keep the secret on this device only.
         options.set_access_synchronized(Some(false));
