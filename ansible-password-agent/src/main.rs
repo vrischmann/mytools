@@ -63,8 +63,6 @@ impl PasswordType {
             PasswordType::Become => "Enter Ansible become password: ",
         }
     }
-
-
 }
 
 /// Read a secret from stdin, trimming the trailing newline.
