@@ -99,7 +99,7 @@ jobs:
       - name: Patch formula
         shell: bash
         run: |
-          uv run .github/scripts/patch-formula.py \
+          python3 .github/scripts/patch-formula.py \
             --formula tap-repo/Formula/ansible-password-agent.rb \
             --version "${{ steps.version.outputs.value }}" \
             --artifacts dist
