@@ -32,7 +32,7 @@ install-all: cargo-install-all go-install-all
 # Usage: just bump-apa 2.0.0
 bump-apa version:
     @sed -i 's/^version = ".*"/version = "{{version}}"/' ansible-password-agent/Cargo.toml
-    @cargo update
+    @cargo generate-lockfile
     @git add ansible-password-agent/Cargo.toml Cargo.lock
     @git commit -m "chore(ansible-password-agent): bump to {{version}}"
     @git tag ansible-password-agent/v{{version}}
