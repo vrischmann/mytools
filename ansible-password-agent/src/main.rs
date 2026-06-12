@@ -1,25 +1,43 @@
 mod backend;
 mod tty;
-
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
+use std::io::{self, Read};
 
 /// Secure credential provider for Ansible vault and become passwords.
-///
-/// Outputs the requested password to stdout. Designed to be used as
-/// Ansible's --vault-password-file or --become-password-file.
 ///
 /// On Linux, passwords are cached in kernel keyring memory for 10 minutes.
 /// On macOS, passwords are stored in the Keychain with biometric protection.
 #[derive(Parser, Debug)]
 #[command(name = "ansible-password-agent", version, about)]
 struct Cli {
-    /// Type of password to retrieve.
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Store a password.
     ///
-    /// vault    — Ansible vault encryption password (default)
-    /// become   — Ansible privilege escalation (sudo) password
-    #[arg(long, default_value = "vault", value_name = "TYPE")]
-    r#type: PasswordType,
+    /// Reads from stdin when piped, otherwise prompts interactively.
+    /// Examples:
+    ///   op read "op://vault/item/field" | ansible-password-agent store
+    ///   ansible-password-agent store
+    Store {
+        /// Type of password to store.
+        #[arg(long, default_value = "vault", value_name = "TYPE")]
+        r#type: PasswordType,
+    },
+    /// Retrieve a stored password and write it to stdout.
+    ///
+    /// If the password is not cached, prompts via the terminal,
+    /// stores it, then outputs it. Suitable for use as Ansible's
+    /// --vault-password-file or --become-password-file.
+    Get {
+        /// Type of password to retrieve.
+        #[arg(long, default_value = "vault", value_name = "TYPE")]
+        r#type: PasswordType,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,26 +62,48 @@ impl PasswordType {
             PasswordType::Become => "Enter Ansible become password: ",
         }
     }
+
+
+}
+
+/// Read a secret from stdin, trimming the trailing newline.
+///
+/// Empty input (just a newline or EOF with no data) is treated as an error.
+fn read_stdin() -> Result<String> {
+    let mut buf = String::new();
+    io::stdin().read_to_string(&mut buf)?;
+    let secret = buf.trim_end_matches('\n').trim_end_matches('\r');
+    if secret.is_empty() {
+        bail!("empty password on stdin");
+    }
+    Ok(secret.to_owned())
 }
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let key = cli.r#type.as_key();
 
-    // 1. Try to retrieve from the secure backend.
-    if let Some(secret) = backend::get(key)? {
-        print!("{secret}");
-        return Ok(());
+    match cli.command {
+        Command::Store { r#type } => {
+            let key = r#type.as_key();
+
+            let secret = if atty::is(atty::Stream::Stdin) {
+                tty::prompt_password(r#type.prompt_message())?
+            } else {
+                read_stdin()?
+            };
+
+            backend::set(key, &secret)?;
+        }
+        Command::Get { r#type } => {
+            let key = r#type.as_key();
+
+            match backend::get(key)? {
+                Some(secret) => print!("{secret}"),
+                None => bail!("no {key} password stored; use `ansible-password-agent store --type {key}` first"),
+            }
+        }
     }
 
-    // 2. Not cached — prompt the user.
-    let secret = tty::prompt_password(cli.r#type.prompt_message())?;
-
-    // 3. Save to the backend for future use.
-    backend::set(key, &secret)?;
-
-    // 4. Output to stdout for Ansible to consume.
-    print!("{secret}");
     Ok(())
 }
 
