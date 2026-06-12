@@ -52,4 +52,12 @@ impl PasswordBackend for MacOSBackend {
 
         Ok(())
     }
+
+    fn delete(key: &str) -> Result<()> {
+        match passwords::delete_generic_password(KEYCHAIN_SERVICE, key) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == -25300 => Ok(()), // errSecItemNotFound — already gone
+            Err(e) => Err(e).context("failed to delete password from keychain"),
+        }
+    }
 }

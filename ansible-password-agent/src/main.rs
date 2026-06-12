@@ -30,14 +30,15 @@ enum Command {
     },
     /// Retrieve a stored password and write it to stdout.
     ///
-    /// If the password is not cached, prompts via the terminal,
-    /// stores it, then outputs it. Suitable for use as Ansible's
-    /// --vault-password-file or --become-password-file.
+    /// Suitable for use as Ansible's --vault-password-file or
+    /// --become-password-file.
     Get {
         /// Type of password to retrieve.
         #[arg(long, default_value = "vault", value_name = "TYPE")]
         r#type: PasswordType,
     },
+    /// Remove all stored passwords.
+    Clear,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +102,9 @@ fn run() -> Result<()> {
                 Some(secret) => print!("{secret}"),
                 None => bail!("no {key} password stored; use `ansible-password-agent store --type {key}` first"),
             }
+        }
+        Command::Clear => {
+            backend::clear()?;
         }
     }
 

@@ -59,6 +59,21 @@ impl PasswordBackend for LinuxBackend {
 
         Ok(())
     }
+
+    fn delete(key: &str) -> Result<()> {
+        let description = key_description(key);
+        let ring = session_keyring()?;
+
+        match ring.search(&description) {
+            Ok(k) => {
+                k.invalidate()
+                    .map_err(|e| anyhow::anyhow!("failed to invalidate key: {e}"))?;
+                Ok(())
+            }
+            Err(KeyError::KeyDoesNotExist | KeyError::KeyExpired) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("failed to search for key in keyring: {e}")),
+        }
+    }
 }
 
 /// Return the process session keyring.

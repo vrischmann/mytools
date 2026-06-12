@@ -19,6 +19,11 @@ pub trait PasswordBackend {
     /// On Linux this sets a 600-second kernel timeout.
     /// On macOS this stores in Keychain with biometric access control.
     fn set(key: &str, secret: &str) -> Result<()>;
+
+    /// Delete a stored password by key.
+    ///
+    /// Returns `Ok(())` whether or not the key existed.
+    fn delete(key: &str) -> Result<()>;
 }
 
 /// Retrieve a cached password using the appropriate platform backend.
@@ -51,4 +56,31 @@ pub fn set(key: &str, secret: &str) -> Result<()> {
     {
         compile_error!("ansible-password-agent only supports Linux and macOS")
     }
+}
+
+/// Delete a password using the appropriate platform backend.
+pub fn delete(key: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::LinuxBackend::delete(key)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::MacOSBackend::delete(key)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        compile_error!("ansible-password-agent only supports Linux and macOS")
+    }
+}
+
+/// All known password keys.
+const ALL_KEYS: &[&str] = &["vault", "become"];
+
+/// Remove all stored passwords.
+pub fn clear() -> Result<()> {
+    for key in ALL_KEYS {
+        delete(key)?;
+    }
+    Ok(())
 }
