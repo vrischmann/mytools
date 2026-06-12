@@ -28,6 +28,16 @@ go-install-all:
     cd gitjuggling && go install .
 # Install all workspace binaries
 install-all: cargo-install-all go-install-all
+# Bump ansible-password-agent version in Cargo.toml, commit, and tag for release.
+# Usage: just bump-apa 2.0.0
+bump-apa version:
+    @sed -i 's/^version = ".*"/version = "{{version}}"/' ansible-password-agent/Cargo.toml
+    @git add ansible-password-agent/Cargo.toml
+    @git commit -m "chore(ansible-password-agent): bump to {{version}}"
+    @git tag ansible-password-agent/v{{version}}
+    @echo "=> Bumped and tagged ansible-password-agent/v{{version}}"
+    @echo "=> Push with: git push --follow-tags origin main"
+
 # Show available modules
 list-modules:
     @echo "Available modules:"
