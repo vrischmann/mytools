@@ -10,8 +10,6 @@ A multi-binary Rust workspace containing personal utility tools.
 | **git-stacked** | Visualize stacked git branches and their relationships |
 | **cargo-target-clean** | Interactively find and clean Cargo target directories to free disk space |
 | **git-journal** | Summarize git commits for journal entries across work and personal repos |
-| **zoekt-reindex** | Reindex git repositories for zoekt source code search |
-| **ansible-password-agent** | Secure credential provider for Ansible vault and become passwords |
 
 ## Building
 
@@ -49,11 +47,8 @@ cargo install --path gitjuggling
 cargo install --path git-stacked
 cargo install --path cargo-target-clean
 cargo install --path git-journal
-cargo install --path zoekt-reindex
-cargo install --path ansible-password-agent
 ```
 
-Pre-built binaries for `zoekt-reindex` are available from the [GitHub Releases](https://github.com/vrischmann/mytools/releases) page (Linux x86_64 and macOS ARM64).
 
 ## Tool Details
 
@@ -119,49 +114,4 @@ git-journal --format plain
 
 See [git-journal/README.md](git-journal/README.md) for more details.
 
-### zoekt-reindex
 
-Reindex git repositories for [zoekt](https://github.com/sourcegraph/zoekt) source code search.
-
-```bash
-# Reindex with defaults (reads config from ~/.config/zoekt-reindex/config.toml)
-zoekt-reindex
-
-# Specify options on the command line
-zoekt-reindex --codebase ~/dev --index-dir ~/.zoekt --depth 3
-
-# Control concurrency
-zoekt-reindex --concurrency 4
-
-# Use a custom config file
-zoekt-reindex --config /path/to/config.toml
-```
-
-Configuration file (`~/.config/zoekt-reindex/config.toml`):
-```toml
-zoekt_bin = "~/go/bin/zoekt-git-index"
-index_dir = "~/.zoekt"
-codebase = "~/dev/Batch"
-depth = 3
-concurrency = 2
-```
-
-See [zoekt-reindex/README.md](zoekt-reindex/README.md) for more details.
-
-### ansible-password-agent
-
-Secure credential provider for Ansible vault and become passwords. Never writes cleartext to disk.
-
-```bash
-# Get vault password (default)
-ansible-password-agent
-
-# Get become (sudo) password
-ansible-password-agent --type become
-```
-
-**Platform backends:**
-- **Linux**: Uses kernel keyring via `linux-keyutils`. Passwords are stored in unswappable kernel memory and expire after 10 minutes.
-- **macOS**: Uses Keychain Services with biometric access control (Touch ID / Face ID / device password). iCloud sync is disabled.
-
-Designed to be used as Ansible's `--vault-password-file` or `--become-password-file`. Passwords are read from `/dev/tty` (immune to stdin redirects).

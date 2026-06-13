@@ -3,6 +3,5 @@ members = [
     "git-stacked",
     "cargo-target-clean",
     "git-journal",
-    "ansible-password-agent",
 ]
 resolver = "2"
