@@ -3,5 +3,6 @@ members = [
     "git-stacked",
     "cargo-target-clean",
     "git-journal",
+    "hf-cache",
 ]
 resolver = "2"

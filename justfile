@@ -21,6 +21,7 @@ cargo-install-all:
     @cargo install --path git-stacked
     @cargo install --path cargo-target-clean
     @cargo install --path git-journal
+    @cargo install --path hf-cache
 
 # Install Go project
 go-install-all:
@@ -34,4 +35,5 @@ list-modules:
     @echo "  - git-stacked"
     @echo "  - cargo-target-clean"
     @echo "  - git-journal"
+    @echo "  - hf-cache"
 
