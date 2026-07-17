@@ -39,6 +39,7 @@ struct CachedRepo {
     weights_bytes: u64,
     total_bytes: u64,
     incomplete: bool,
+    modalities: Modalities,
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────
@@ -153,6 +154,153 @@ fn parse_repo_dir_name(dir_name: &str) -> Option<(String, String)> {
     None
 }
 
+// ── Modality inference ─────────────────────────────────────────────────
+
+/// Input modalities a model accepts. Video is intentionally folded into
+/// `image` (in practice it rides on the same vision projector / config).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+struct Modalities {
+    text: bool,
+    image: bool,
+    audio: bool,
+}
+
+fn vision_token_regex() -> &'static Regex {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)vl|vision|llava|idefics|clip|florence|internvl|cogvlm|pixtral|paligemma|smolvlm|deepseekvl|minicpm|qwen2vl|swin|vit|dinov|beit|deit|blip",
+        )
+        .expect("vision token regex should be valid")
+    })
+}
+
+fn audio_token_regex() -> &'static Regex {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)whisper|clap|wav2vec|hubert|unispeech|seamless|qwen2_audio|bark|musicgen|vits|speecht5|pyannote",
+        )
+        .expect("audio token regex should be valid")
+    })
+}
+
+/// Names that indicate a text tokenizer is shipped with the repo. Covers both
+/// loose tokenizer files and diffusers-style directories named `tokenizer`.
+fn is_tokenizer_name(lower: &str) -> bool {
+    matches!(
+        lower,
+        "tokenizer"
+            | "t5_tokenizer"
+            | "tokenizer.json"
+            | "tokenizer_config.json"
+            | "tokenizer.model"
+            | "vocab.json"
+            | "merges.txt"
+    ) || lower.ends_with(".tiktoken")
+}
+
+fn read_json(snapshot_dir: Option<&Path>, name: &str) -> Option<serde_json::Value> {
+    let dir = snapshot_dir?;
+    let data = fs::read(dir.join(name)).ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+/// Lowercased `architectures` + `model_type` joined into one haystack so the
+/// token regexes can match either field in a single pass.
+fn arch_token_string(config: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(arr) = config.get("architectures").and_then(|a| a.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                parts.push(s.to_lowercase());
+            }
+        }
+    }
+    if let Some(s) = config.get("model_type").and_then(|v| v.as_str()) {
+        parts.push(s.to_lowercase());
+    }
+    parts.join(" ")
+}
+
+/// Infer text/image/audio input support from the snapshot's files and config.
+///
+/// GGUF repos ship almost no metadata, so `mmproj` is treated as a strong
+/// signal for *both* text and image (the base is always a text LLM), and a
+/// bare weights file with no other signal falls back to text. Whisper-style
+/// decoders ship a tokenizer for their text *output*, so the text flag is
+/// dropped when only audio is detected.
+fn infer_modalities(files: &[CachedFile], snapshot_dir: Option<&Path>) -> Modalities {
+    let mut m = Modalities::default();
+    let names: Vec<String> = files.iter().map(|f| f.name.to_lowercase()).collect();
+
+    let has_mmproj = names.iter().any(|n| n.contains("mmproj"));
+    let has_tokenizer = names.iter().any(|n| is_tokenizer_name(n));
+    let has_model_index = names.iter().any(|n| n == "model_index.json");
+    let has_weights = files.iter().any(|f| f.role == FileRole::Weights);
+
+    // llama.cpp / GGUF vision projector ⇒ the base is always a text LLM.
+    if has_mmproj {
+        m.image = true;
+        m.text = true;
+    }
+
+    let config = read_json(snapshot_dir, "config.json");
+    let preproc = read_json(snapshot_dir, "preprocessor_config.json");
+
+    let tokens = config.as_ref().map(arch_token_string).unwrap_or_default();
+    let has_vision_config = config
+        .as_ref()
+        .and_then(|c| c.get("vision_config"))
+        .is_some();
+    let has_audio_config = config
+        .as_ref()
+        .and_then(|c| c.get("audio_config"))
+        .is_some();
+    let has_text_config = config.as_ref().and_then(|c| c.get("text_config")).is_some();
+    let has_image_processor = preproc
+        .as_ref()
+        .and_then(|p| p.get("image_processor_type"))
+        .is_some();
+    // timm-style configs (e.g. the WD taggers) use `pretrained_cfg` with image
+    // input dimensions and no tokenizer.
+    let has_pretrained_cfg = config
+        .as_ref()
+        .and_then(|c| c.get("pretrained_cfg"))
+        .is_some();
+
+    if has_vision_config
+        || has_image_processor
+        || has_pretrained_cfg
+        || vision_token_regex().is_match(&tokens)
+    {
+        m.image = true;
+    }
+
+    if has_audio_config || audio_token_regex().is_match(&tokens) {
+        m.audio = true;
+    }
+
+    if has_tokenizer || has_text_config || has_model_index {
+        m.text = true;
+    }
+
+    // A pure audio decoder (e.g. Whisper) ships a tokenizer for its text output,
+    // not for text input. Drop the text flag in that case.
+    if m.audio && !m.image && !has_text_config && !has_model_index {
+        m.text = false;
+    }
+
+    // Bare weights with no metadata (a typical GGUF text LLM) ⇒ assume text.
+    if !m.text && !m.image && !m.audio && has_weights {
+        m.text = true;
+    }
+
+    m
+}
+
 // ── Formatting helpers ──────────────────────────────────────────────────
 
 const SIZE_UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
@@ -175,6 +323,23 @@ fn format_bytes(bytes: u64) -> String {
         2
     };
     format!("{:.prec$} {}", value, SIZE_UNITS[unit], prec = decimals)
+}
+
+fn render_modalities(m: &Modalities) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if m.text {
+        parts.push("text".to_string());
+    }
+    if m.image {
+        parts.push("image".magenta().to_string());
+    }
+    if m.audio {
+        parts.push("audio".blue().to_string());
+    }
+    if parts.is_empty() {
+        return "—".dimmed().to_string();
+    }
+    parts.join("·")
 }
 
 fn file_label(repo: &CachedRepo, file: &CachedFile) -> String {
@@ -322,6 +487,7 @@ fn discover_repos(cache_root: &Path) -> Vec<CachedRepo> {
             .sum();
         let total_bytes = files.iter().map(|f| f.size).sum();
         let incomplete = kind == "model" && !files.iter().any(|f| f.role == FileRole::Weights);
+        let modalities = infer_modalities(&files, snapshot_dir.as_deref());
 
         repos.push(CachedRepo {
             id: repo_id,
@@ -338,6 +504,7 @@ fn discover_repos(cache_root: &Path) -> Vec<CachedRepo> {
             weights_bytes,
             total_bytes,
             incomplete,
+            modalities,
         });
     }
 
@@ -396,11 +563,13 @@ fn render_text(repos: &[CachedRepo], root: &Path) -> String {
             r.refs.join(", ")
         };
         lines.push(format!(
-            "{} {} {} {}",
+            "{} {} {} {} {} {}",
             r.id.bold().cyan(),
             format!("[{refs_str}]").dimmed(),
             "·".dimmed(),
-            format_bytes(r.total_bytes).dimmed()
+            format_bytes(r.total_bytes).dimmed(),
+            "·".dimmed(),
+            render_modalities(&r.modalities),
         ));
 
         for f in &r.files {
@@ -440,9 +609,10 @@ fn render_text(repos: &[CachedRepo], root: &Path) -> String {
                 r.refs.join(", ")
             };
             lines.push(format!(
-                "  {} {}",
+                "  {} {} {}",
                 r.id.yellow(),
-                format!("[{refs_str}]").dimmed()
+                format!("[{refs_str}]").dimmed(),
+                render_modalities(&r.modalities),
             ));
         }
     }
