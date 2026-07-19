@@ -4,5 +4,6 @@ members = [
     "cargo-target-clean",
     "git-journal",
     "hf-cache",
+    "humanize",
 ]
 resolver = "2"

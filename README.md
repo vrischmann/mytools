@@ -10,6 +10,7 @@ A multi-binary Rust workspace containing personal utility tools.
 | **git-stacked** | Visualize stacked git branches and their relationships |
 | **cargo-target-clean** | Interactively find and clean Cargo target directories to free disk space |
 | **git-journal** | Summarize git commits for journal entries across work and personal repos |
+| **humanize** | Display a byte size in human-readable form (e.g. 1024 → 1KiB) |
 
 ## Building
 
@@ -47,6 +48,7 @@ cargo install --path gitjuggling
 cargo install --path git-stacked
 cargo install --path cargo-target-clean
 cargo install --path git-journal
+cargo install --path humanize
 ```
 
 
@@ -113,5 +115,16 @@ git-journal --format plain
 ```
 
 See [git-journal/README.md](git-journal/README.md) for more details.
+
+### humanize
+
+Display a byte size in human-readable form using binary units.
+
+```bash
+humanize 1024      # 1KiB
+humanize 1234567   # 1.18MiB
+```
+
+See [humanize/README.md](humanize/README.md) for more details.
 
 

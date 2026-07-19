@@ -22,6 +22,7 @@ cargo-install-all:
     @cargo install --path cargo-target-clean
     @cargo install --path git-journal
     @cargo install --path hf-cache
+    @cargo install --path humanize
 
 # Install Go project
 go-install-all:
@@ -36,4 +37,5 @@ list-modules:
     @echo "  - cargo-target-clean"
     @echo "  - git-journal"
     @echo "  - hf-cache"
+    @echo "  - humanize"
 
