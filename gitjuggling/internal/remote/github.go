@@ -21,8 +21,13 @@ type githubRepo struct {
 	} `json:"owner"`
 }
 
-// gitHubToken retrieves a GitHub token using `gh auth token`.
-func gitHubToken() (string, error) {
+// gitHubToken retrieves a GitHub token, first trying the provided token,
+// then falling back to `gh auth token`.
+func gitHubToken(directToken string) (string, error) {
+	if t := strings.TrimSpace(directToken); t != "" {
+		return t, nil
+	}
+
 	cmd := exec.Command("gh", "auth", "token")
 	out, err := cmd.Output()
 	if err != nil {
@@ -34,8 +39,9 @@ func gitHubToken() (string, error) {
 // FetchGitHubRepos fetches all repos visible to the authenticated GitHub user,
 // then filters by the given owners. This includes private repos owned by the
 // authenticated user, which the /users/{owner}/repos endpoint would not return.
-func FetchGitHubRepos(owners []string) ([]*RemoteRepo, error) {
-	token, err := gitHubToken()
+// The githubToken parameter is optional; if empty, it will try `gh auth token`.
+func FetchGitHubRepos(owners []string, githubToken string) ([]*RemoteRepo, error) {
+	token, err := gitHubToken(githubToken)
 	if err != nil {
 		return nil, err
 	}

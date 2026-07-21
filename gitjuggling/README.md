@@ -47,6 +47,7 @@ workspace:
   personal:
     root: /home/user/dev
     github_owners: [vrischmann]
+    github_token: "ghp_..."  # Optional: direct GitHub token, falls back to `gh auth token`
     forgejo_url: https://git.example.com
     forgejo_user: vincent
     forgejo_token: "op://vault/item/field"

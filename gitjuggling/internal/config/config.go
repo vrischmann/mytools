@@ -19,6 +19,7 @@ type Config struct {
 type Workspace struct {
 	Root         string   `yaml:"root"`
 	GitHubOwners []string `yaml:"github_owners"`
+	GitHubToken  string   `yaml:"github_token"`
 	ForgejoURL   string   `yaml:"forgejo_url"`
 	ForgejoUser  string   `yaml:"forgejo_user"`
 	ForgejoToken string   `yaml:"forgejo_token"`

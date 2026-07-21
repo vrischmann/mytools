@@ -47,6 +47,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		Workspaces       map[string]struct {
 			Root         string   `yaml:"root"`
 			GitHubOwners []string `yaml:"github_owners"`
+			GitHubToken  string   `yaml:"github_token,omitempty"`
 			ForgejoURL   string   `yaml:"forgejo_url,omitempty"`
 			ForgejoUser  string   `yaml:"forgejo_user,omitempty"`
 			ForgejoToken string   `yaml:"forgejo_token,omitempty"`
@@ -61,6 +62,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		Workspaces: map[string]struct {
 			Root         string   `yaml:"root"`
 			GitHubOwners []string `yaml:"github_owners"`
+			GitHubToken  string   `yaml:"github_token,omitempty"`
 			ForgejoURL   string   `yaml:"forgejo_url,omitempty"`
 			ForgejoUser  string   `yaml:"forgejo_user,omitempty"`
 			ForgejoToken string   `yaml:"forgejo_token,omitempty"`

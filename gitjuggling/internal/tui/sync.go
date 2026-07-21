@@ -211,7 +211,7 @@ func (m SyncModel) fetchGithubRepos() tea.Cmd {
 		if len(m.ws.GitHubOwners) == 0 {
 			return syncGithubReposMsg{}
 		}
-		repos, err := remote.FetchGitHubRepos(m.ws.GitHubOwners)
+		repos, err := remote.FetchGitHubRepos(m.ws.GitHubOwners, m.ws.GitHubToken)
 		return syncGithubReposMsg{repos: repos, err: err}
 	}
 }
