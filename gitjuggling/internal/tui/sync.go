@@ -259,7 +259,7 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 		return m.finishExecution()
 	}
 
-	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency)
+	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency, m.ws.GitHubToken)
 	return m, m.waitForActionResult()
 }
 

@@ -251,8 +251,9 @@ type ConfirmFunc func(prompt string) bool
 // ExecuteActions runs a list of actions with bounded concurrency.
 // Results are sent on the returned channel as they complete.
 // The channel is closed when all actions are done.
-func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool, confirmFn ConfirmFunc, concurrency int) <-chan ActionResult {
+func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool, confirmFn ConfirmFunc, concurrency int, configuredGitHubToken string) <-chan ActionResult {
 	out := make(chan ActionResult, len(actions))
+	githubToken, githubTokenErr := githubCloneToken(actions, configuredGitHubToken)
 
 	if concurrency < 1 {
 		concurrency = 1
@@ -281,7 +282,7 @@ func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool,
 				if dryRun {
 					result = dryRunAction(a)
 				} else {
-					result = executeAction(a, confirmFn)
+					result = executeAction(a, confirmFn, githubToken, githubTokenErr)
 				}
 				out <- result
 			}(action)
@@ -330,14 +331,22 @@ func dryRunAction(action syncplan.Action) ActionResult {
 	}
 }
 
-func executeAction(action syncplan.Action, confirmFn ConfirmFunc) ActionResult {
+func executeAction(action syncplan.Action, confirmFn ConfirmFunc, githubToken string, githubTokenErr error) ActionResult {
 	switch action.Type {
 	case syncplan.ActionUpdate:
 		return executeUpdate(action.Repo, action.LocalPath)
 	case syncplan.ActionMove:
 		return executeMove(action.Repo, action.CurrentPath, action.ExpectedPath, confirmFn)
 	case syncplan.ActionClone:
-		return executeClone(action.Repo, action.ExpectedPath)
+		if action.Repo.Source == remote.SourceGitHub && githubTokenErr != nil {
+			return ActionResult{
+				Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
+				Path:        action.ExpectedPath,
+				Success:     false,
+				Message:     fmt.Sprintf("resolving GitHub token: %v", githubTokenErr),
+			}
+		}
+		return executeClone(action.Repo, action.ExpectedPath, githubToken)
 	default:
 		return ActionResult{
 			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
@@ -424,7 +433,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 	}
 }
 
-func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
+func executeClone(repo *remote.RemoteRepo, expectedPath, githubToken string) ActionResult {
 	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	// Ensure parent directory exists
@@ -437,7 +446,32 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 		}
 	}
 
-	cmd := exec.Command("git", "clone", repo.CloneURL, expectedPath)
+	args := []string{"clone", repo.CloneURL, expectedPath}
+	var env []string
+	var removeAskpass func()
+	if repo.Source == remote.SourceGitHub {
+		askpassPath, cleanup, err := githubAskpass(githubToken)
+		if err != nil {
+			return ActionResult{
+				Description: desc,
+				Path:        expectedPath,
+				Success:     false,
+				Message:     fmt.Sprintf("creating GitHub authentication helper: %v", err),
+			}
+		}
+		removeAskpass = cleanup
+		defer removeAskpass()
+		env = append(os.Environ(),
+			"GIT_ASKPASS="+askpassPath,
+			"GIT_TERMINAL_PROMPT=0",
+			"GITJUGGLING_GITHUB_TOKEN="+githubToken,
+		)
+		args = append([]string{"-c", "credential.helper="}, args...)
+	}
+	cmd := exec.Command("git", args...)
+	if env != nil {
+		cmd.Env = env
+	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -453,4 +487,50 @@ func executeClone(repo *remote.RemoteRepo, expectedPath string) ActionResult {
 		Success:     true,
 		Message:     "cloned",
 	}
+}
+
+// githubCloneToken resolves a token only when a GitHub clone will run. This
+// preserves the existing `gh auth token` fallback while avoiding a needless
+// credential lookup for Forgejo-only plans.
+func githubCloneToken(actions []syncplan.Action, configuredToken string) (string, error) {
+	for _, action := range actions {
+		if action.Type == syncplan.ActionClone && action.Repo.Source == remote.SourceGitHub {
+			return remote.GitHubToken(configuredToken)
+		}
+	}
+	return "", nil
+}
+
+// githubAskpass returns a short-lived helper that gives Git the conventional
+// username/password pair for GitHub HTTPS token authentication. The token is
+// kept out of command arguments and clone URLs.
+func githubAskpass(token string) (string, func(), error) {
+	helper, err := os.CreateTemp("", "gitjuggling-github-askpass-*")
+	if err != nil {
+		return "", nil, err
+	}
+	path := helper.Name()
+	cleanup := func() { _ = os.Remove(path) }
+
+	const script = `#!/bin/sh
+case "$1" in
+  *Username*|*username*) printf '%s\n' x-access-token ;;
+  *Password*|*password*) printf '%s\n' "$GITJUGGLING_GITHUB_TOKEN" ;;
+  *) exit 1 ;;
+esac
+`
+	if _, err := helper.WriteString(script); err != nil {
+		helper.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := helper.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
 }

@@ -50,7 +50,7 @@ workspace:
     github_token: "ghp_..."  # Optional: direct GitHub token, falls back to `gh auth token`
     forgejo_url: https://git.example.com
     forgejo_user: vincent
-    forgejo_token: "op://vault/item/field"
+    forgejo_token: "forgejo_token_here" # Or an `op://vault/item/field` reference
     rules:
       base: /home/user/dev/repos
       forks: /home/user/dev/forks
