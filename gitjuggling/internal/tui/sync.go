@@ -11,6 +11,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/prune"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -78,6 +79,7 @@ type syncPhase int
 
 const (
 	syncPhaseLoading syncPhase = iota
+	syncPhaseResume
 	syncPhasePlan
 	syncPhaseMoveConfirm
 	syncPhaseExecuting
@@ -117,6 +119,7 @@ type SyncModel struct {
 	forgejoRepos []*remote.RemoteRepo
 	localRepos   *discover.LocalRepos
 	actions      []syncplan.Action
+	savedPlan    *syncstate.Plan
 
 	// Plan phase
 	viewport     viewport.Model
@@ -168,7 +171,7 @@ type loadingStep struct {
 }
 
 // NewSyncModel creates a new sync TUI model.
-func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune, skipPull bool, concurrency int) SyncModel {
+func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune, skipPull bool, concurrency int, savedPlan *syncstate.Plan) SyncModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = SuccessStyle
@@ -181,8 +184,12 @@ func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactiv
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	phase := syncPhaseLoading
+	if savedPlan != nil {
+		phase = syncPhaseResume
+	}
 	return SyncModel{
-		phase:        syncPhaseLoading,
+		phase:        phase,
 		workspace:    workspaceName,
 		dryRun:       dryRun,
 		interactive:  interactive,
@@ -195,10 +202,14 @@ func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactiv
 		loadingIdx:   0,
 		ctx:          ctx,
 		cancel:       cancel,
+		savedPlan:    savedPlan,
 	}
 }
 
 func (m SyncModel) Init() tea.Cmd {
+	if m.phase == syncPhaseResume {
+		return nil
+	}
 	return tea.Batch(m.spinner.Tick, m.fetchGithubRepos())
 }
 
@@ -254,6 +265,13 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 	}
 	m.succeeded = nil
 	m.failed = nil
+	for _, result := range initialResults {
+		if err := m.completeAction(result); err != nil {
+			m.loadErr = err
+			m.phase = syncPhaseSummary
+			return m, tea.Quit
+		}
+	}
 
 	if len(actions) == 0 {
 		return m.finishExecution()
@@ -261,6 +279,53 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 
 	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency, m.ws.GitHubToken)
 	return m, m.waitForActionResult()
+}
+
+func (m *SyncModel) setPlan(actions []syncplan.Action) {
+	m.actions = actions
+	m.updates = 0
+	m.skippedPulls = 0
+	m.moves = 0
+	m.clones = 0
+	for _, a := range m.actions {
+		switch a.Type {
+		case syncplan.ActionUpdate:
+			if m.skipPull && a.AlreadyInPlace {
+				m.skippedPulls++
+			} else {
+				m.updates++
+			}
+		case syncplan.ActionMove:
+			m.moves++
+		case syncplan.ActionClone:
+			m.clones++
+		}
+	}
+}
+
+// completeAction removes a successful action from the durable plan.
+func (m *SyncModel) completeAction(result execute.ActionResult) error {
+	if !result.Success || m.dryRun {
+		return nil
+	}
+	for i, action := range m.actions {
+		path := action.LocalPath
+		if action.Type != syncplan.ActionUpdate {
+			path = action.ExpectedPath
+		}
+		if action.Type == syncplan.ActionMove && result.Message == "skipped (user declined)" {
+			path = action.CurrentPath
+		}
+		if path != result.Path {
+			continue
+		}
+		m.actions = append(m.actions[:i], m.actions[i+1:]...)
+		break
+	}
+	if len(m.actions) == 0 {
+		return syncstate.Delete(m.workspace)
+	}
+	return syncstate.Save(m.workspace, syncstate.Plan{Actions: m.actions})
 }
 
 func (m SyncModel) buildExecutableActions() []syncplan.Action {
@@ -381,7 +446,7 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.doPrune {
+	if m.doPrune && m.localRepos != nil {
 		allRemote := append(m.githubRepos, m.forgejoRepos...)
 		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
 		if len(m.orphans) > 0 {
@@ -460,20 +525,18 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.githubRepos = githubRepos
 		m.forgejoRepos = forgejoRepos
 
-		m.actions = syncplan.BuildPlan(append(m.githubRepos, m.forgejoRepos...), m.localRepos, m.ws)
-
-		for _, a := range m.actions {
-			switch a.Type {
-			case syncplan.ActionUpdate:
-				if m.skipPull && a.AlreadyInPlace {
-					m.skippedPulls++
-				} else {
-					m.updates++
-				}
-			case syncplan.ActionMove:
-				m.moves++
-			case syncplan.ActionClone:
-				m.clones++
+		m.setPlan(syncplan.BuildPlan(append(m.githubRepos, m.forgejoRepos...), m.localRepos, m.ws))
+		if !m.dryRun {
+			var err error
+			if len(m.actions) == 0 {
+				err = syncstate.Delete(m.workspace)
+			} else {
+				err = syncstate.Save(m.workspace, syncstate.Plan{Actions: m.actions})
+			}
+			if err != nil {
+				m.loadErr = err
+				m.phase = syncPhaseSummary
+				return m, tea.Quit
 			}
 		}
 
@@ -487,6 +550,12 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.execResults = append(m.execResults, msg.result)
 
 		m.execLog = append(m.execLog, formatActionResult(msg.result))
+		if err := m.completeAction(msg.result); err != nil {
+			m.loadErr = err
+			m.cancel()
+			m.phase = syncPhaseSummary
+			return m, tea.Quit
+		}
 
 		if m.completed >= m.total {
 			return m.finishExecution()
@@ -512,6 +581,27 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.phase {
+	case syncPhaseResume:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.setPlan(m.savedPlan.Actions)
+			m.phase = syncPhasePlan
+			m.viewport.SetContent(m.buildPlanContent())
+			return m, nil
+		case "n", "N":
+			if err := syncstate.Delete(m.workspace); err != nil {
+				m.loadErr = err
+				m.phase = syncPhaseSummary
+				return m, tea.Quit
+			}
+			m.savedPlan = nil
+			m.phase = syncPhaseLoading
+			return m, tea.Batch(m.spinner.Tick, m.fetchGithubRepos())
+		case "q", "ctrl+c", "esc":
+			m.cancel()
+			return m, tea.Quit
+		}
+
 	case syncPhasePlan:
 		switch msg.String() {
 		case "enter":
@@ -692,6 +782,8 @@ func (m SyncModel) View() string {
 	switch m.phase {
 	case syncPhaseLoading:
 		return m.renderLoading()
+	case syncPhaseResume:
+		return m.renderResume()
 	case syncPhasePlan:
 		return m.renderPlan()
 	case syncPhaseMoveConfirm:
@@ -711,6 +803,16 @@ func (m SyncModel) View() string {
 	default:
 		return ""
 	}
+}
+
+func (m SyncModel) renderResume() string {
+	count := 0
+	if m.savedPlan != nil {
+		count = len(m.savedPlan.Actions)
+	}
+	return fmt.Sprintf("%s\n\n  An unfinished sync plan with %d pending actions was found.\n\n  %s\n",
+		SectionHeader("Resume saved plan?"), count,
+		DimStyle.Render("[Enter/y] Resume  [n] Rebuild  [q] Quit"))
 }
 
 func (m SyncModel) renderLoading() string {
@@ -1017,7 +1119,7 @@ func formatActionResult(r execute.ActionResult) string {
 }
 
 func (m SyncModel) afterTrackingFix() (tea.Model, tea.Cmd) {
-	if m.doPrune {
+	if m.doPrune && m.localRepos != nil {
 		allRemote := append(m.githubRepos, m.forgejoRepos...)
 		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
 		if len(m.orphans) > 0 {

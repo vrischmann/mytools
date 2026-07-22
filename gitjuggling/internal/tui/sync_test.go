@@ -6,6 +6,9 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
@@ -41,6 +44,21 @@ func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 	if results[0].Message != "skipped (user declined)" {
 		t.Fatalf("unexpected skipped message %q", results[0].Message)
 	}
+}
+
+func TestResumePlanUsesSavedActions(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
+	m := NewSyncModel("personal", nil, false, true, false, false, 1, &syncstate.Plan{Actions: []syncplan.Action{{
+		Type:         syncplan.ActionClone,
+		Repo:         repo,
+		ExpectedPath: "/tmp/demo",
+	}}})
+
+	model, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	resumed := model.(SyncModel)
+	require.Equal(t, syncPhasePlan, resumed.phase)
+	require.Len(t, resumed.actions, 1)
+	require.Equal(t, 1, resumed.clones)
 }
 
 func TestBuildExecutableActionsSkipsPullForReposAlreadyInPlace(t *testing.T) {
