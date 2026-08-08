@@ -48,6 +48,20 @@ func GetCurrentBranch(localPath string) (string, error) {
 	return branch, nil
 }
 
+// IsDirty reports whether the working tree at localPath has uncommitted
+// changes: staged, unstaged, or untracked files. This matches the set of
+// changes that `git stash -u` would capture, so it flags repos whose
+// uncommitted work an update would displace.
+func IsDirty(localPath string) (bool, error) {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = localPath
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status failed: %w", err)
+	}
+	return len(strings.TrimSpace(string(output))) > 0, nil
+}
+
 // GetDefaultBranch returns the default branch of the remote (e.g. "main").
 func GetDefaultBranch(localPath, remoteName string) (string, error) {
 	ref := fmt.Sprintf("refs/remotes/%s/HEAD", remoteName)

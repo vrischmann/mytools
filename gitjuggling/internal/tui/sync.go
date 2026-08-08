@@ -33,6 +33,7 @@ type syncForgejoReposMsg struct {
 
 type syncLocalReposMsg struct {
 	local *discover.LocalRepos
+	dirty map[string]bool
 	err   error
 }
 
@@ -81,6 +82,7 @@ const (
 	syncPhaseLoading syncPhase = iota
 	syncPhaseResume
 	syncPhasePlan
+	syncPhaseDirtyConfirm
 	syncPhaseMoveConfirm
 	syncPhaseExecuting
 	syncPhaseSummary
@@ -133,6 +135,12 @@ type SyncModel struct {
 	moveConfirmIndices []int
 	moveConfirmCursor  int
 	skippedMoveIndices map[int]bool
+
+	// Dirty confirmation phase (repos with uncommitted changes)
+	dirtyConfirmIndices []int
+	dirtyConfirmCursor  int
+	skippedDirtyIndices map[int]bool
+	localDirty          map[string]bool
 
 	// Execution phase
 	completed   int
@@ -240,7 +248,19 @@ func (m SyncModel) fetchForgejoRepos() tea.Cmd {
 func (m SyncModel) scanLocalRepos() tea.Cmd {
 	return func() tea.Msg {
 		local, err := discover.Discover(m.ws.Root)
-		return syncLocalReposMsg{local: local, err: err}
+		if err != nil {
+			return syncLocalReposMsg{err: err}
+		}
+		// Detect repos with uncommitted changes so the user can be prompted
+		// before an update would stash them. This runs as part of the existing
+		// async scan, so it never blocks the UI.
+		dirty := make(map[string]bool)
+		for _, repo := range local.Iter() {
+			if d, derr := execute.IsDirty(repo.Path); derr == nil {
+				dirty[repo.Path] = d
+			}
+		}
+		return syncLocalReposMsg{local: local, dirty: dirty}
 	}
 }
 
@@ -252,6 +272,42 @@ func (m SyncModel) waitForActionResult() tea.Cmd {
 		}
 		return syncActionResultMsg{result: r}
 	}
+}
+
+// enterFromPlan handles [Enter] on the plan view. In interactive, non-dry-run
+// mode it walks the confirmation phases in order — dirty repos first, then
+// moves — before executing. Dry-run and non-interactive runs skip straight to
+// execution.
+func (m SyncModel) enterFromPlan() (tea.Model, tea.Cmd) {
+	if m.dryRun || !m.interactive {
+		return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
+	}
+	if dirty := m.dirtyUpdateIndices(); len(dirty) > 0 {
+		m.phase = syncPhaseDirtyConfirm
+		m.dirtyConfirmIndices = dirty
+		m.dirtyConfirmCursor = 0
+		m.skippedDirtyIndices = make(map[int]bool)
+		return m, nil
+	}
+	return m.enterMoveOrExecute()
+}
+
+// enterMoveOrExecute enters the move-confirmation phase when there are moves
+// to confirm, otherwise starts execution.
+func (m SyncModel) enterMoveOrExecute() (tea.Model, tea.Cmd) {
+	if m.moves > 0 {
+		m.phase = syncPhaseMoveConfirm
+		m.moveConfirmIndices = m.moveConfirmIndices[:0]
+		for i, action := range m.actions {
+			if action.Type == syncplan.ActionMove {
+				m.moveConfirmIndices = append(m.moveConfirmIndices, i)
+			}
+		}
+		m.moveConfirmCursor = 0
+		m.skippedMoveIndices = make(map[int]bool)
+		return m, nil
+	}
+	return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
 }
 
 func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []execute.ActionResult) (tea.Model, tea.Cmd) {
@@ -337,6 +393,9 @@ func (m SyncModel) buildExecutableActions() []syncplan.Action {
 		if action.Type == syncplan.ActionUpdate && m.skipPull && action.AlreadyInPlace {
 			continue
 		}
+		if action.Type == syncplan.ActionUpdate && m.skippedDirtyIndices[i] {
+			continue
+		}
 		actions = append(actions, action)
 	}
 	return actions
@@ -382,6 +441,58 @@ func (m SyncModel) buildSkippedMoveResults() []execute.ActionResult {
 		})
 	}
 	return results
+}
+
+// buildSkippedDirtyResults produces "skipped" results for update actions the
+// user chose to leave untouched because they had uncommitted changes.
+func (m SyncModel) buildSkippedDirtyResults() []execute.ActionResult {
+	if len(m.skippedDirtyIndices) == 0 {
+		return nil
+	}
+
+	results := make([]execute.ActionResult, 0, len(m.skippedDirtyIndices))
+	for i, action := range m.actions {
+		if action.Type != syncplan.ActionUpdate || !m.skippedDirtyIndices[i] {
+			continue
+		}
+
+		results = append(results, execute.ActionResult{
+			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
+			Path:        action.LocalPath,
+			Success:     true,
+			Message:     "skipped (uncommitted changes — user declined)",
+		})
+	}
+	return results
+}
+
+// buildInitialResults aggregates every "skipped" result produced before
+// execution: pull-skipped, dirty-skipped, and move-skipped.
+func (m SyncModel) buildInitialResults() []execute.ActionResult {
+	var results []execute.ActionResult
+	results = append(results, m.buildSkippedPullResults()...)
+	results = append(results, m.buildSkippedDirtyResults()...)
+	results = append(results, m.buildSkippedMoveResults()...)
+	return results
+}
+
+// dirtyUpdateIndices returns the indices of update actions that will run and
+// whose local working tree has uncommitted changes.
+func (m SyncModel) dirtyUpdateIndices() []int {
+	var indices []int
+	for i, action := range m.actions {
+		if action.Type != syncplan.ActionUpdate {
+			continue
+		}
+		// Updates skipped via --skip-pull never execute, so don't prompt.
+		if m.skipPull && action.AlreadyInPlace {
+			continue
+		}
+		if m.localDirty[action.LocalPath] {
+			indices = append(indices, i)
+		}
+	}
+	return indices
 }
 
 func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
@@ -518,6 +629,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.localRepos = msg.local
+		m.localDirty = msg.dirty
 		m.loadingSteps[2].done = true
 
 		// Dedup and build plan
@@ -605,20 +717,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case syncPhasePlan:
 		switch msg.String() {
 		case "enter":
-			if m.interactive && !m.dryRun && m.moves > 0 {
-				m.phase = syncPhaseMoveConfirm
-				m.moveConfirmIndices = m.moveConfirmIndices[:0]
-				for i, action := range m.actions {
-					if action.Type == syncplan.ActionMove {
-						m.moveConfirmIndices = append(m.moveConfirmIndices, i)
-					}
-				}
-				m.moveConfirmCursor = 0
-				m.skippedMoveIndices = make(map[int]bool)
-				return m, nil
-			}
-
-			return m.startExecution(m.buildExecutableActions(), m.buildSkippedPullResults())
+			return m.enterFromPlan()
 
 		case "q", "ctrl+c":
 			m.cancel()
@@ -629,6 +728,29 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
+
+	case syncPhaseDirtyConfirm:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.dirtyConfirmCursor++
+		case "n", "N":
+			if m.dirtyConfirmCursor < len(m.dirtyConfirmIndices) {
+				m.skippedDirtyIndices[m.dirtyConfirmIndices[m.dirtyConfirmCursor]] = true
+			}
+			m.dirtyConfirmCursor++
+		case "a", "A":
+			m.dirtyConfirmCursor = len(m.dirtyConfirmIndices)
+		case "q", "esc", "ctrl+c":
+			m.phase = syncPhasePlan
+			return m, nil
+		default:
+			return m, nil
+		}
+
+		if m.dirtyConfirmCursor >= len(m.dirtyConfirmIndices) {
+			return m.enterMoveOrExecute()
+		}
+		return m, nil
 
 	case syncPhaseMoveConfirm:
 		switch msg.String() {
@@ -649,8 +771,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.moveConfirmCursor >= len(m.moveConfirmIndices) {
-			initialResults := append(m.buildSkippedPullResults(), m.buildSkippedMoveResults()...)
-			return m.startExecution(m.buildExecutableActions(), initialResults)
+			return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
 		}
 		return m, nil
 
@@ -786,6 +907,8 @@ func (m SyncModel) View() string {
 		return m.renderResume()
 	case syncPhasePlan:
 		return m.renderPlan()
+	case syncPhaseDirtyConfirm:
+		return m.renderDirtyConfirm()
 	case syncPhaseMoveConfirm:
 		return m.renderMoveConfirm()
 	case syncPhaseExecuting:
@@ -864,6 +987,27 @@ func (m SyncModel) renderMoveConfirm() string {
 		DimStyle.Render(action.CurrentPath),
 		DimStyle.Render("→ "+action.ExpectedPath),
 		DimStyle.Render("[y] Move  [n] Skip  [a] Move all remaining  [q] Cancel"),
+	)
+}
+
+func (m SyncModel) renderDirtyConfirm() string {
+	if m.dirtyConfirmCursor >= len(m.dirtyConfirmIndices) {
+		return ""
+	}
+
+	action := m.actions[m.dirtyConfirmIndices[m.dirtyConfirmCursor]]
+	current := m.dirtyConfirmCursor + 1
+	total := len(m.dirtyConfirmIndices)
+
+	return fmt.Sprintf(
+		"%s\n\n  %s/%s (%s) has uncommitted changes.\n\n    %s\n\n  Updating stashes them first (recoverable via %s).\n\n  %s\n",
+		SectionHeader(fmt.Sprintf("Dirty repo %d/%d", current, total)),
+		action.Repo.Owner,
+		action.Repo.Name,
+		action.Repo.SourceLabel(),
+		DimStyle.Render(action.LocalPath),
+		DimStyle.Render("git stash pop"),
+		DimStyle.Render("[y] Stash & update  [n] Skip  [a] Stash all remaining  [q] Cancel"),
 	)
 }
 

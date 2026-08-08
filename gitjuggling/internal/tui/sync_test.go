@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"testing"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -108,4 +110,92 @@ func TestStartExecutionWithOnlySkippedMovesFinishesImmediately(t *testing.T) {
 	if finalModel.phase != syncPhaseSummary {
 		t.Fatalf("expected summary phase, got %v", finalModel.phase)
 	}
+}
+
+func TestBuildExecutableActionsSkipsDeclinedDirtyUpdates(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
+
+	m := SyncModel{
+		actions: []syncplan.Action{
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/clean"},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty"},
+			{Type: syncplan.ActionClone, Repo: repo, ExpectedPath: "/tmp/clone"},
+		},
+		skippedDirtyIndices: map[int]bool{1: true},
+	}
+
+	actions := m.buildExecutableActions()
+	require.Len(t, actions, 2)
+	require.Equal(t, "/tmp/clean", actions[0].LocalPath)
+	require.Equal(t, syncplan.ActionClone, actions[1].Type)
+
+	results := m.buildSkippedDirtyResults()
+	require.Len(t, results, 1)
+	require.Equal(t, "/tmp/dirty", results[0].Path)
+	require.Contains(t, results[0].Message, "uncommitted changes")
+}
+
+func TestDirtyUpdateIndicesFlagsOnlyExecutableDirtyUpdates(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
+
+	m := SyncModel{
+		skipPull:   true,
+		localDirty: map[string]bool{"/tmp/clean": false, "/tmp/dirty": true, "/tmp/skip": true},
+		actions: []syncplan.Action{
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/clean"},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty"},
+			// Already in place with --skip-pull: would not execute, must be excluded.
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/skip", AlreadyInPlace: true},
+			{Type: syncplan.ActionClone, Repo: repo, ExpectedPath: "/tmp/clone"},
+		},
+	}
+
+	require.Equal(t, []int{1}, m.dirtyUpdateIndices())
+}
+
+func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := SyncModel{
+		interactive: true,
+		localDirty:  map[string]bool{"/tmp/dirty1": true, "/tmp/dirty2": true},
+		actions: []syncplan.Action{
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty1"},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty2"},
+		},
+		ws:          &config.Workspace{},
+		ctx:         ctx,
+		cancel:      cancel,
+		concurrency: 1,
+	}
+	m.phase = syncPhasePlan
+
+	// Enter plan -> enters dirty confirm over both dirty updates.
+	entered, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = entered.(SyncModel)
+	require.Equal(t, syncPhaseDirtyConfirm, m.phase)
+	require.Equal(t, []int{0, 1}, m.dirtyConfirmIndices)
+
+	// Skip the first: it drops out of the executable set; the second stays.
+	skipped, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = skipped.(SyncModel)
+	require.True(t, m.skippedDirtyIndices[0])
+	require.Equal(t, []string{"/tmp/dirty2"}, updatePaths(m.buildExecutableActions()))
+
+	// Confirm the second: no more dirty items, so it proceeds to execution.
+	confirmed, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = confirmed.(SyncModel)
+	require.Equal(t, syncPhaseExecuting, m.phase)
+}
+
+func updatePaths(actions []syncplan.Action) []string {
+	var paths []string
+	for _, a := range actions {
+		if a.Type == syncplan.ActionUpdate {
+			paths = append(paths, a.LocalPath)
+		}
+	}
+	return paths
 }

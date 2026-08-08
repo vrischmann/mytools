@@ -1,6 +1,13 @@
 package execute
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestIsNoTrackingError(t *testing.T) {
 	tests := []struct {
@@ -43,4 +50,44 @@ func TestIsNoTrackingError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsDirty(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		require.NoError(t, cmd.Run())
+	}
+	writeFile := func(name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	git("init")
+	git("config", "user.email", "test@example.com")
+	git("config", "user.name", "test")
+
+	// Fresh empty repo: not dirty.
+	clean, err := IsDirty(dir)
+	require.NoError(t, err)
+	require.False(t, clean)
+
+	// Untracked file: dirty.
+	writeFile("untracked.txt", "hello")
+	dirty, err := IsDirty(dir)
+	require.NoError(t, err)
+	require.True(t, dirty)
+
+	// Once committed: clean again.
+	git("add", "untracked.txt")
+	git("commit", "-m", "initial")
+	clean, err = IsDirty(dir)
+	require.NoError(t, err)
+	require.False(t, clean)
+
+	// Modifying a tracked file: dirty.
+	writeFile("untracked.txt", "changed")
+	dirty, err = IsDirty(dir)
+	require.NoError(t, err)
+	require.True(t, dirty)
 }
