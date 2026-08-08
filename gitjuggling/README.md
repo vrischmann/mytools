@@ -33,6 +33,20 @@ Flags:
 
 ## Configuration
 
+Routing is decided per repo, in this priority order:
+
+1. **Pattern rules** (`rules.patterns`) — the first regex matching the repo
+   name wins. The `to` template is the repo's **full final path** and must
+   reference at least one capture (`$1`, `${name}`, or `$0` for the whole
+   match), so distinct repos never collapse onto one directory. Example:
+   `^workspace-(.+)$` with `to: workspaces/$1` sends `workspace-foo` to
+   `workspaces/foo`.
+2. **Category rules** — `forks` for forks, then `archived` for archived
+   repos, then `base` for everything else.
+
+If two repos would land on the same path, the owner is prefixed to the final
+   directory component to disambiguate (e.g. `owner-foo`).
+
 Config file location: `<UserConfigDir>/gitjuggling/config.yaml`
 
 On Linux: `~/.config/gitjuggling/config.yaml`
@@ -55,6 +69,12 @@ workspace:
       base: /home/user/dev/repos
       forks: /home/user/dev/forks
       archived: /home/user/dev/archived
+      patterns:
+        # Routes workspace-* repos into workspaces/<suffix>; the `to`
+        # template is the repo's full final path and may reference
+        # capture groups ($1, ${name}, or $0 for the whole match).
+        - pattern: '^workspace-(.+)$'
+          to: /home/user/dev/workspaces/$1
 
   work:
     root: /home/user/work

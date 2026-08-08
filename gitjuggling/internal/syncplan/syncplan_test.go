@@ -7,6 +7,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
+	"github.com/stretchr/testify/require"
 )
 
 func testWorkspace() *config.Workspace {
@@ -272,4 +273,94 @@ func TestBuildPlanIgnoreAll(t *testing.T) {
 	if len(actions) != 0 {
 		t.Fatalf("expected 0 actions, got %d", len(actions))
 	}
+}
+
+func TestClassifyPatternFull(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/workspaces/$1"},
+	}
+	repo := makeRepo("workspace-foo", "owner", false, false)
+
+	got := ClassifyRepo(repo, ws, false)
+	require.Equal(t, "/home/user/dev/workspaces/foo", got)
+}
+
+func TestClassifyPatternWholeMatch(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-.+$`, To: "/home/user/dev/workspaces/$0"},
+	}
+	repo := makeRepo("workspace-foo", "owner", false, false)
+
+	got := ClassifyRepo(repo, ws, false)
+	require.Equal(t, "/home/user/dev/workspaces/workspace-foo", got)
+}
+
+func TestClassifyPatternBeatsFork(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/workspaces/$1"},
+	}
+	repo := makeRepo("workspace-foo", "owner", true, false) // isFork
+
+	got := ClassifyRepo(repo, ws, false)
+	require.Equal(t, "/home/user/dev/workspaces/foo", got)
+}
+
+func TestClassifyPatternFirstMatchWins(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/ws/$1"},
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/other/$1"},
+	}
+	repo := makeRepo("workspace-foo", "owner", false, false)
+
+	got := ClassifyRepo(repo, ws, false)
+	require.Equal(t, "/home/user/dev/ws/foo", got)
+}
+
+func TestClassifyPatternNoMatchFallsBackToBase(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/ws/$1"},
+	}
+	repo := makeRepo("myrepo", "owner", false, false)
+
+	got := ClassifyRepo(repo, ws, false)
+	require.Equal(t, filepath.Join("/home/user/dev/repos", "myrepo"), got)
+}
+
+func TestBuildPlanClonePattern(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/workspaces/$1"},
+	}
+	local := discover.NewLocalRepos(nil)
+	repo := makeRepo("workspace-foo", "owner", false, false)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws)
+	require.Len(t, actions, 1)
+	require.Equal(t, ActionClone, actions[0].Type)
+	require.Equal(t, "/home/user/dev/workspaces/foo", actions[0].ExpectedPath)
+}
+
+func TestBuildPlanPatternClash(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{
+		{Pattern: `^workspace-(.+)$`, To: "/home/user/dev/workspaces/$1"},
+	}
+	repo1 := makeRepo("workspace-foo", "owner1", false, false)
+	repo2 := makeRepo("workspace-foo", "owner2", false, false)
+	local := discover.NewLocalRepos(nil)
+
+	actions := BuildPlan([]*remote.RemoteRepo{repo1, repo2}, local, ws)
+	require.Len(t, actions, 2)
+
+	paths := map[string]bool{
+		actions[0].ExpectedPath: true,
+		actions[1].ExpectedPath: true,
+	}
+	require.True(t, paths["/home/user/dev/workspaces/owner1-foo"], "expected owner1-foo in %v", paths)
+	require.True(t, paths["/home/user/dev/workspaces/owner2-foo"], "expected owner2-foo in %v", paths)
 }

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -173,4 +175,93 @@ func parseYAML(input string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func TestRulesValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		rules   Rules
+		wantErr string // substring of the error; empty means no error expected
+	}{
+		{name: "no patterns"},
+		{
+			name:  "valid capture",
+			rules: Rules{Patterns: []PatternRule{{Pattern: `^workspace-(.+)$`, To: "/ws/$1"}}},
+		},
+		{
+			name:  "valid named group",
+			rules: Rules{Patterns: []PatternRule{{Pattern: `^workspace-(?P<id>.+)$`, To: "/ws/${id}"}}},
+		},
+		{
+			name:  "valid whole match with no capture groups",
+			rules: Rules{Patterns: []PatternRule{{Pattern: `^workspace-.+$`, To: "/ws/$0"}}},
+		},
+		{
+			name:    "to without capture",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^workspace-(.+)$`, To: "/ws/flat"}}},
+			wantErr: "must reference at least one capture",
+		},
+		{
+			name:    "to is only an escaped dollar",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^x$`, To: "/ws/$$1"}}},
+			wantErr: "must reference at least one capture",
+		},
+		{
+			name:    "invalid regex",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^workspace-[`, To: "/ws/$0"}}},
+			wantErr: "invalid regex",
+		},
+		{
+			name:    "out of range group",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^workspace-(.+)$`, To: "/ws/$2"}}},
+			wantErr: "non-existent group",
+		},
+		{
+			name:    "unknown named group",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^workspace-(.+)$`, To: "/ws/${nope}"}}},
+			wantErr: "not a named group",
+		},
+		{
+			name:    "empty pattern",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: "", To: "/ws/$0"}}},
+			wantErr: "pattern is empty",
+		},
+		{
+			name:    "empty to",
+			rules:   Rules{Patterns: []PatternRule{{Pattern: `^x$`, To: ""}}},
+			wantErr: "to is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.rules.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestLoadFromRejectsInvalidPattern(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+workspace:
+  personal:
+    root: /home/user/dev
+    github_owners: [vrischmann]
+    rules:
+      base: /home/user/dev/repos
+      patterns:
+        - pattern: '^workspace-(.+)$'
+          to: /home/user/dev/workspaces/flat
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must reference at least one capture")
 }
