@@ -28,7 +28,9 @@ type PruneResult struct {
 type ConfirmFunc func(prompt string) bool
 
 // FindOrphans finds local repos that have no matching upstream remote.
-// Repos whose directory name matches the workspace ignore list are excluded.
+// Repos whose directory name matches the workspace ignore list are excluded,
+// and linked worktrees are never orphans: removing one with RemoveAll would
+// corrupt the parent clone's worktree metadata.
 func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo, ws *config.Workspace) []*OrphanRepo {
 	// Build a set of normalized remote URLs for fast lookup
 	remoteURLs := make(map[string]struct{}, len(remoteRepos))
@@ -39,6 +41,10 @@ func FindOrphans(local *discover.LocalRepos, remoteRepos []*remote.RemoteRepo, w
 	var orphans []*OrphanRepo
 
 	for _, repo := range local.Iter() {
+		if repo.IsWorktree {
+			continue
+		}
+
 		name := filepath.Base(repo.Path)
 
 		// Skip ignored repos.
