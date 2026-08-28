@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
 )
@@ -35,81 +36,75 @@ func IsStaleUpstreamError(msg string) bool {
 
 // GetCurrentBranch returns the current branch name for a git repo.
 func GetCurrentBranch(localPath string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = localPath
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w", err)
-	}
-	branch := strings.TrimSpace(string(output))
-	if branch == "HEAD" {
-		return "", fmt.Errorf("repository is in detached HEAD state")
-	}
-	return branch, nil
+	return git.CurrentBranch(localPath)
 }
 
 // IsDirty reports whether the working tree at localPath has uncommitted
-// changes: staged, unstaged, or untracked files. This matches the set of
-// changes that `git stash -u` would capture, so it flags repos whose
-// uncommitted work an update would displace.
+// changes.
 func IsDirty(localPath string) (bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = localPath
-	output, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("git status failed: %w", err)
-	}
-	return len(strings.TrimSpace(string(output))) > 0, nil
+	return git.IsDirty(localPath)
 }
 
 // GetDefaultBranch returns the default branch of the remote (e.g. "main").
 func GetDefaultBranch(localPath, remoteName string) (string, error) {
-	ref := fmt.Sprintf("refs/remotes/%s/HEAD", remoteName)
-	cmd := exec.Command("git", "symbolic-ref", "--short", ref)
-	cmd.Dir = localPath
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git symbolic-ref failed: %w", err)
-	}
-	short := strings.TrimSpace(string(output))
-	prefix := remoteName + "/"
-	if !strings.HasPrefix(short, prefix) {
-		return "", fmt.Errorf("unexpected default ref %q", short)
-	}
-	return strings.TrimPrefix(short, prefix), nil
+	return git.DefaultBranch(localPath, remoteName)
 }
 
 // IsBranchMerged reports whether branch has been merged into base.
 func IsBranchMerged(localPath, branch, base string) (bool, error) {
-	cmd := exec.Command("git", "branch", "--merged", base, "--format=%(refname:short)")
-	cmd.Dir = localPath
-	output, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("git branch --merged failed: %w", err)
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.TrimSpace(line) == branch {
-			return true, nil
-		}
-	}
-	return false, nil
+	return git.IsBranchMerged(localPath, branch, base)
 }
 
 // RemoteBranchExists checks whether a branch exists on the given remote.
 func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
-	cmd := exec.Command("git", "ls-remote", "--heads", remoteName)
-	cmd.Dir = localPath
-	output, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("git ls-remote failed: %w", err)
-	}
-	target := fmt.Sprintf("refs/heads/%s", branch)
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.HasSuffix(strings.TrimSpace(line), target) {
-			return true, nil
+	return git.RemoteBranchExists(localPath, remoteName, branch)
+}
+
+// RemoveWorktreeAndBranch removes a linked worktree whose branch is gone
+// from the remote. When deleteBranch is true it also deletes the local
+// branch. Callers pass deleteBranch only when the branch was verified as
+// merged at plan time, so a branch -d failure here is a genuine error and
+// is reported as such. git also refuses to remove a dirty worktree.
+func RemoveWorktreeAndBranch(worktreePath, mainRepoPath, branch string, deleteBranch bool) ActionResult {
+	desc := filepath.Base(filepath.Dir(worktreePath)) + "/" + filepath.Base(worktreePath)
+
+	removeCmd := exec.Command("git", "worktree", "remove", worktreePath)
+	removeCmd.Dir = mainRepoPath
+	if output, err := removeCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        worktreePath,
+			Success:     false,
+			Message:     fmt.Sprintf("git worktree remove failed: %s", strings.TrimSpace(string(output))),
 		}
 	}
-	return false, nil
+
+	if !deleteBranch {
+		return ActionResult{
+			Description: desc,
+			Path:        worktreePath,
+			Success:     true,
+			Message:     fmt.Sprintf("removed stale worktree (kept branch %s — not fully merged)", branch),
+		}
+	}
+
+	deleteCmd := exec.Command("git", "branch", "-d", branch)
+	deleteCmd.Dir = mainRepoPath
+	if output, err := deleteCmd.CombinedOutput(); err != nil {
+		return ActionResult{
+			Description: desc,
+			Path:        worktreePath,
+			Success:     false,
+			Message:     fmt.Sprintf("git branch -d %s failed: %s", branch, strings.TrimSpace(string(output))),
+		}
+	}
+
+	return ActionResult{
+		Description: desc,
+		Path:        worktreePath,
+		Success:     true,
+		Message:     fmt.Sprintf("removed stale worktree and merged branch %s", branch),
+	}
 }
 
 // PushAndSetUpstream pushes the current branch to the remote with -u,
@@ -340,6 +335,17 @@ func dryRunAction(action syncplan.Action) ActionResult {
 			Success:     true,
 			Message:     "would clone",
 		}
+	case syncplan.ActionPruneWorktree:
+		message := fmt.Sprintf("would remove stale worktree and merged branch %s", action.Branch)
+		if !action.Merged {
+			message = fmt.Sprintf("would remove stale worktree (branch %s kept — not fully merged)", action.Branch)
+		}
+		return ActionResult{
+			Description: desc,
+			Path:        action.WorktreePath,
+			Success:     true,
+			Message:     message,
+		}
 	default:
 		return ActionResult{Description: desc, Success: false, Message: "unknown action type"}
 	}
@@ -351,6 +357,8 @@ func executeAction(action syncplan.Action, confirmFn ConfirmFunc, githubToken st
 		return executeUpdate(action.Repo, action.LocalPath)
 	case syncplan.ActionMove:
 		return executeMove(action.Repo, action.CurrentPath, action.ExpectedPath, confirmFn)
+	case syncplan.ActionPruneWorktree:
+		return RemoveWorktreeAndBranch(action.WorktreePath, action.MainRepoPath, action.Branch, action.Merged)
 	case syncplan.ActionClone:
 		if action.Repo.Source == remote.SourceGitHub && githubTokenErr != nil {
 			return ActionResult{

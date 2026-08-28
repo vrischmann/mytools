@@ -84,6 +84,7 @@ const (
 	syncPhasePlan
 	syncPhaseDirtyConfirm
 	syncPhaseMoveConfirm
+	syncPhaseWorktreeConfirm
 	syncPhaseExecuting
 	syncPhaseSummary
 	syncPhasePruneList
@@ -124,17 +125,23 @@ type SyncModel struct {
 	savedPlan    *syncstate.Plan
 
 	// Plan phase
-	viewport     viewport.Model
-	ready        bool
-	updates      int
-	skippedPulls int
-	moves        int
-	clones       int
+	viewport       viewport.Model
+	ready          bool
+	updates        int
+	skippedPulls   int
+	moves          int
+	clones         int
+	worktreePrunes int
 
 	// Move confirmation phase
 	moveConfirmIndices []int
 	moveConfirmCursor  int
 	skippedMoveIndices map[int]bool
+
+	// Worktree prune confirmation phase
+	worktreeConfirmIndices []int
+	worktreeConfirmCursor  int
+	skippedWorktreePrunes  map[int]bool
 
 	// Dirty confirmation phase (repos with uncommitted changes)
 	dirtyConfirmIndices []int
@@ -293,7 +300,7 @@ func (m SyncModel) enterFromPlan() (tea.Model, tea.Cmd) {
 }
 
 // enterMoveOrExecute enters the move-confirmation phase when there are moves
-// to confirm, otherwise starts execution.
+// to confirm, otherwise falls through to the worktree confirmation.
 func (m SyncModel) enterMoveOrExecute() (tea.Model, tea.Cmd) {
 	if m.moves > 0 {
 		m.phase = syncPhaseMoveConfirm
@@ -305,6 +312,24 @@ func (m SyncModel) enterMoveOrExecute() (tea.Model, tea.Cmd) {
 		}
 		m.moveConfirmCursor = 0
 		m.skippedMoveIndices = make(map[int]bool)
+		return m, nil
+	}
+	return m.enterWorktreeOrExecute()
+}
+
+// enterWorktreeOrExecute enters the worktree-prune confirmation phase when
+// there are stale worktrees to prune, otherwise starts execution.
+func (m SyncModel) enterWorktreeOrExecute() (tea.Model, tea.Cmd) {
+	if m.worktreePrunes > 0 {
+		m.phase = syncPhaseWorktreeConfirm
+		m.worktreeConfirmIndices = m.worktreeConfirmIndices[:0]
+		for i, action := range m.actions {
+			if action.Type == syncplan.ActionPruneWorktree {
+				m.worktreeConfirmIndices = append(m.worktreeConfirmIndices, i)
+			}
+		}
+		m.worktreeConfirmCursor = 0
+		m.skippedWorktreePrunes = make(map[int]bool)
 		return m, nil
 	}
 	return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
@@ -343,6 +368,7 @@ func (m *SyncModel) setPlan(actions []syncplan.Action) {
 	m.skippedPulls = 0
 	m.moves = 0
 	m.clones = 0
+	m.worktreePrunes = 0
 	for _, a := range m.actions {
 		switch a.Type {
 		case syncplan.ActionUpdate:
@@ -355,6 +381,8 @@ func (m *SyncModel) setPlan(actions []syncplan.Action) {
 			m.moves++
 		case syncplan.ActionClone:
 			m.clones++
+		case syncplan.ActionPruneWorktree:
+			m.worktreePrunes++
 		}
 	}
 }
@@ -368,6 +396,9 @@ func (m *SyncModel) completeAction(result execute.ActionResult) error {
 		path := action.LocalPath
 		if action.Type != syncplan.ActionUpdate {
 			path = action.ExpectedPath
+		}
+		if action.Type == syncplan.ActionPruneWorktree {
+			path = action.WorktreePath
 		}
 		if action.Type == syncplan.ActionMove && result.Message == "skipped (user declined)" {
 			path = action.CurrentPath
@@ -388,6 +419,9 @@ func (m SyncModel) buildExecutableActions() []syncplan.Action {
 	actions := make([]syncplan.Action, 0, len(m.actions))
 	for i, action := range m.actions {
 		if action.Type == syncplan.ActionMove && m.skippedMoveIndices[i] {
+			continue
+		}
+		if action.Type == syncplan.ActionPruneWorktree && m.skippedWorktreePrunes[i] {
 			continue
 		}
 		if action.Type == syncplan.ActionUpdate && m.skipPull && action.AlreadyInPlace {
@@ -443,6 +477,29 @@ func (m SyncModel) buildSkippedMoveResults() []execute.ActionResult {
 	return results
 }
 
+// buildSkippedWorktreeResults produces "skipped" results for worktree prune
+// actions the user declined.
+func (m SyncModel) buildSkippedWorktreeResults() []execute.ActionResult {
+	if len(m.skippedWorktreePrunes) == 0 {
+		return nil
+	}
+
+	results := make([]execute.ActionResult, 0, len(m.skippedWorktreePrunes))
+	for i, action := range m.actions {
+		if action.Type != syncplan.ActionPruneWorktree || !m.skippedWorktreePrunes[i] {
+			continue
+		}
+
+		results = append(results, execute.ActionResult{
+			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
+			Path:        action.WorktreePath,
+			Success:     true,
+			Message:     "skipped (user declined)",
+		})
+	}
+	return results
+}
+
 // buildSkippedDirtyResults produces "skipped" results for update actions the
 // user chose to leave untouched because they had uncommitted changes.
 func (m SyncModel) buildSkippedDirtyResults() []execute.ActionResult {
@@ -467,12 +524,13 @@ func (m SyncModel) buildSkippedDirtyResults() []execute.ActionResult {
 }
 
 // buildInitialResults aggregates every "skipped" result produced before
-// execution: pull-skipped, dirty-skipped, and move-skipped.
+// execution: pull-skipped, dirty-skipped, move-skipped, and prune-skipped.
 func (m SyncModel) buildInitialResults() []execute.ActionResult {
 	var results []execute.ActionResult
 	results = append(results, m.buildSkippedPullResults()...)
 	results = append(results, m.buildSkippedDirtyResults()...)
 	results = append(results, m.buildSkippedMoveResults()...)
+	results = append(results, m.buildSkippedWorktreeResults()...)
 	return results
 }
 
@@ -637,7 +695,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.githubRepos = githubRepos
 		m.forgejoRepos = forgejoRepos
 
-		m.setPlan(syncplan.BuildPlan(append(m.githubRepos, m.forgejoRepos...), m.localRepos, m.ws))
+		m.setPlan(syncplan.BuildPlan(append(m.githubRepos, m.forgejoRepos...), m.localRepos, m.ws, execute.RemoteBranchExists))
 		if !m.dryRun {
 			var err error
 			if len(m.actions) == 0 {
@@ -771,6 +829,29 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.moveConfirmCursor >= len(m.moveConfirmIndices) {
+			return m.enterWorktreeOrExecute()
+		}
+		return m, nil
+
+	case syncPhaseWorktreeConfirm:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.worktreeConfirmCursor++
+		case "n", "N":
+			if m.worktreeConfirmCursor < len(m.worktreeConfirmIndices) {
+				m.skippedWorktreePrunes[m.worktreeConfirmIndices[m.worktreeConfirmCursor]] = true
+			}
+			m.worktreeConfirmCursor++
+		case "a", "A":
+			m.worktreeConfirmCursor = len(m.worktreeConfirmIndices)
+		case "q", "esc", "ctrl+c":
+			m.phase = syncPhasePlan
+			return m, nil
+		default:
+			return m, nil
+		}
+
+		if m.worktreeConfirmCursor >= len(m.worktreeConfirmIndices) {
 			return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
 		}
 		return m, nil
@@ -911,6 +992,8 @@ func (m SyncModel) View() string {
 		return m.renderDirtyConfirm()
 	case syncPhaseMoveConfirm:
 		return m.renderMoveConfirm()
+	case syncPhaseWorktreeConfirm:
+		return m.renderWorktreeConfirm()
 	case syncPhaseExecuting:
 		return m.renderExecuting()
 	case syncPhaseTrackingFix:
@@ -990,6 +1073,37 @@ func (m SyncModel) renderMoveConfirm() string {
 	)
 }
 
+func (m SyncModel) renderWorktreeConfirm() string {
+	if m.worktreeConfirmCursor >= len(m.worktreeConfirmIndices) {
+		return ""
+	}
+
+	action := m.actions[m.worktreeConfirmIndices[m.worktreeConfirmCursor]]
+	current := m.worktreeConfirmCursor + 1
+	total := len(m.worktreeConfirmIndices)
+
+	var fate, command string
+	if action.Merged {
+		fate = fmt.Sprintf("tracks branch %s, which no longer exists upstream and has been merged.", SuccessStyle.Render(action.Branch))
+		command = fmt.Sprintf("git worktree remove %s && git branch -d %s", action.WorktreePath, action.Branch)
+	} else {
+		fate = fmt.Sprintf("tracks branch %s, which no longer exists upstream.\n    The branch has commits not merged by ancestry (squash-merged?) and will be kept.", SuccessStyle.Render(action.Branch))
+		command = fmt.Sprintf("git worktree remove %s", action.WorktreePath)
+	}
+
+	return fmt.Sprintf(
+		"%s\n\n  %s/%s (%s): worktree at %s\n    %s\n\n    %s\n\n  %s\n",
+		SectionHeader(fmt.Sprintf("Stale worktree %d/%d", current, total)),
+		action.Repo.Owner,
+		action.Repo.Name,
+		action.Repo.SourceLabel(),
+		DimStyle.Render(action.WorktreePath),
+		fate,
+		DimStyle.Render(command),
+		DimStyle.Render("[y] Remove  [n] Skip  [a] Remove all remaining  [q] Cancel"),
+	)
+}
+
 func (m SyncModel) renderDirtyConfirm() string {
 	if m.dirtyConfirmCursor >= len(m.dirtyConfirmIndices) {
 		return ""
@@ -1026,6 +1140,15 @@ func (m SyncModel) buildPlanContent() string {
 			LabelStyle.Render("pulls skipped"),
 		))
 	}
+	if m.worktreePrunes > 0 {
+		if m.updates > 0 || m.moves > 0 || m.clones > 0 || m.skippedPulls > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%s %s",
+			WarnStyle.Render(fmt.Sprintf("%d", m.worktreePrunes)),
+			LabelStyle.Render("stale worktrees"),
+		))
+	}
 	sb.WriteString("\n")
 
 	if m.updates > 0 {
@@ -1042,6 +1165,19 @@ func (m SyncModel) buildPlanContent() string {
 					Arrow(), a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel(),
 					DimStyle.Render(a.CurrentPath),
 					DimStyle.Render(a.ExpectedPath)))
+			}
+		}
+	}
+	if m.worktreePrunes > 0 {
+		sb.WriteString("\n")
+		for _, a := range m.actions {
+			if a.Type == syncplan.ActionPruneWorktree {
+				summary := fmt.Sprintf("remove %s + branch %s", DimStyle.Render(a.WorktreePath), DimStyle.Render(a.Branch))
+				if !a.Merged {
+					summary = fmt.Sprintf("remove %s (branch %s kept)", DimStyle.Render(a.WorktreePath), DimStyle.Render(a.Branch))
+				}
+				sb.WriteString(fmt.Sprintf("    %s %s/%s (%s)  %s\n",
+					CrossMark(), a.Repo.Owner, a.Repo.Name, a.Repo.SourceLabel(), summary))
 			}
 		}
 	}

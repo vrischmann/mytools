@@ -6,6 +6,7 @@ import (
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 )
 
@@ -16,6 +17,9 @@ const (
 	ActionUpdate ActionType = iota
 	ActionMove
 	ActionClone
+	// ActionPruneWorktree removes a linked worktree whose checked-out branch
+	// no longer exists on the remote, then deletes the merged local branch.
+	ActionPruneWorktree
 )
 
 // Action represents a planned action for a single remote repo.
@@ -26,7 +30,22 @@ type Action struct {
 	CurrentPath    string // set for ActionMove
 	ExpectedPath   string // set for ActionMove, ActionClone
 	AlreadyInPlace bool   // set for ActionUpdate when LocalPath == ExpectedPath
+
+	// Worktree fields, set for ActionPruneWorktree.
+	WorktreePath string // directory of the stale worktree
+	MainRepoPath string // main clone the worktree belongs to
+	Branch       string // checked-out branch whose upstream is gone
+	// Merged reports whether Branch is merged into the default branch by
+	// ancestry (git branch --merged). When false the branch is kept after
+	// removing the worktree: its commits may be squash-merged or unmerged,
+	// and git branch -d would refuse anyway.
+	Merged bool
 }
+
+// BranchExistsFunc reports whether branch exists on remoteName for the
+// repository at localPath. Implementations typically shell out to
+// git ls-remote, so this performs a network round trip.
+type BranchExistsFunc func(localPath, remoteName, branch string) (bool, error)
 
 // ClassifyRepo determines the expected local directory for a remote repo
 // based on workspace rules.
@@ -94,8 +113,9 @@ func rulesBaseDir(repo *remote.RemoteRepo, ws *config.Workspace) string {
 }
 
 // BuildPlan determines the action for each remote repo by matching against
-// locally discovered repos.
-func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws *config.Workspace) []Action {
+// locally discovered repos. branchExists performs the live upstream check for
+// worktree pruning; when it is nil, no prune actions are proposed.
+func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws *config.Workspace, branchExists BranchExistsFunc) []Action {
 	// Filter out ignored repos.
 	var filtered []*remote.RemoteRepo
 	for _, repo := range remoteRepos {
@@ -154,5 +174,77 @@ func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws 
 		}
 	}
 
+	actions = append(actions, worktreePruneActions(remoteRepos, local, branchExists)...)
+
 	return actions
+}
+
+// worktreePruneActions proposes removing linked worktrees whose checked-out
+// branch no longer exists upstream. Removing the worktree only deletes the
+// checkout — the branch and its commits stay in the main clone — so the
+// proposal does not depend on merge state. The branch itself is deleted only
+// when it is merged into the default branch; otherwise it is kept (its
+// commits may be squash-merged or genuinely unmerged). Only worktrees of
+// repos known to the workspace are considered.
+func worktreePruneActions(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, branchExists BranchExistsFunc) []Action {
+	if branchExists == nil {
+		return nil
+	}
+
+	var actions []Action
+	for _, wt := range local.Worktrees() {
+		repo := matchRemoteRepo(remoteRepos, wt)
+		if repo == nil {
+			continue
+		}
+
+		branch, err := git.CurrentBranch(wt.Path)
+		if err != nil {
+			continue // detached HEAD or unreadable repo; leave it alone
+		}
+
+		exists, err := branchExists(wt.Path, "origin", branch)
+		if err != nil || exists {
+			continue // only prune when we can confirm the upstream is gone
+		}
+
+		actions = append(actions, Action{
+			Type:         ActionPruneWorktree,
+			Repo:         repo,
+			WorktreePath: wt.Path,
+			MainRepoPath: wt.MainPath,
+			Branch:       branch,
+			Merged:       worktreeBranchMerged(wt, branch),
+		})
+	}
+	return actions
+}
+
+// matchRemoteRepo finds the remote repo whose clone URL matches the origin
+// of the given discovered repo.
+func matchRemoteRepo(remoteRepos []*remote.RemoteRepo, repo *discover.LocalRepo) *remote.RemoteRepo {
+	for _, r := range remoteRepos {
+		for _, url := range repo.RemoteURLs {
+			if discover.NormalizeURL(url) == discover.NormalizeURL(r.CloneURL) {
+				return r
+			}
+		}
+	}
+	return nil
+}
+
+// worktreeBranchMerged reports whether the worktree's branch has been merged
+// into the default branch of its origin. Any error (missing origin/HEAD,
+// missing remote-tracking ref, git failure) counts as not merged so the
+// branch is kept on the safe side.
+func worktreeBranchMerged(wt *discover.LocalRepo, branch string) bool {
+	defaultBranch, err := git.DefaultBranch(wt.Path, "origin")
+	if err != nil {
+		return false
+	}
+	merged, err := git.IsBranchMerged(wt.Path, branch, defaultBranch)
+	if err != nil {
+		return false
+	}
+	return merged
 }

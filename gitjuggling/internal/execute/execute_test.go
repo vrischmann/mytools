@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,4 +91,58 @@ func TestIsDirty(t *testing.T) {
 	dirty, err = IsDirty(dir)
 	require.NoError(t, err)
 	require.True(t, dirty)
+}
+
+func TestRemoveWorktreeAndBranchMergedDeletesBranch(t *testing.T) {
+	root := t.TempDir()
+	mainPath := filepath.Join(root, "demo")
+	wtPath := filepath.Join(root, "demo-wt")
+
+	gittest.Repo(t, mainPath, "ssh://git@example.com/vincent/demo.git")
+	gittest.Worktree(t, mainPath, wtPath, "feature", false)
+
+	result := RemoveWorktreeAndBranch(wtPath, mainPath, "feature", true)
+	require.True(t, result.Success, "result: %s", result.Message)
+	require.NoDirExists(t, wtPath)
+
+	out, err := exec.Command("git", "-C", mainPath, "branch", "--list", "feature").Output()
+	require.NoError(t, err)
+	require.Empty(t, string(out), "merged branch should be deleted")
+}
+
+func TestRemoveWorktreeAndBranchKeepsUnmergedBranch(t *testing.T) {
+	root := t.TempDir()
+	mainPath := filepath.Join(root, "demo")
+	wtPath := filepath.Join(root, "demo-wt")
+
+	gittest.Repo(t, mainPath, "ssh://git@example.com/vincent/demo.git")
+	gittest.Worktree(t, mainPath, wtPath, "feature", true) // diverged branch
+
+	// The plan flags a diverged branch as not merged, so deleteBranch is
+	// false: the worktree goes away, the branch stays for manual inspection.
+	result := RemoveWorktreeAndBranch(wtPath, mainPath, "feature", false)
+	require.True(t, result.Success, "result: %s", result.Message)
+	require.Contains(t, result.Message, "kept branch feature")
+	require.NoDirExists(t, wtPath)
+
+	out, err := exec.Command("git", "-C", mainPath, "branch", "--list", "feature").Output()
+	require.NoError(t, err)
+	require.Contains(t, string(out), "feature", "unmerged branch must be kept")
+}
+
+func TestRemoveWorktreeAndBranchWithoutDelete(t *testing.T) {
+	root := t.TempDir()
+	mainPath := filepath.Join(root, "demo")
+	wtPath := filepath.Join(root, "demo-wt")
+
+	gittest.Repo(t, mainPath, "ssh://git@example.com/vincent/demo.git")
+	gittest.Worktree(t, mainPath, wtPath, "feature", false)
+
+	result := RemoveWorktreeAndBranch(wtPath, mainPath, "feature", false)
+	require.True(t, result.Success, "result: %s", result.Message)
+	require.NoDirExists(t, wtPath)
+
+	out, err := exec.Command("git", "-C", mainPath, "branch", "--list", "feature").Output()
+	require.NoError(t, err)
+	require.Contains(t, string(out), "feature", "branch should be kept when deleteBranch is false")
 }

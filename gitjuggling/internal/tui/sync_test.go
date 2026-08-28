@@ -199,3 +199,40 @@ func updatePaths(actions []syncplan.Action) []string {
 	}
 	return paths
 }
+
+func TestBuildExecutableActionsSkipsDeclinedWorktreePrunes(t *testing.T) {
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "ppst", Source: remote.SourceForgejo}
+
+	m := SyncModel{
+		actions: []syncplan.Action{
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/ppst"},
+			{
+				Type:         syncplan.ActionPruneWorktree,
+				Repo:         repo,
+				WorktreePath: "/tmp/ppst-iter-seq",
+				MainRepoPath: "/tmp/ppst",
+				Branch:       "iter-seq",
+			},
+		},
+		skippedWorktreePrunes: map[int]bool{1: true},
+	}
+
+	actions := m.buildExecutableActions()
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 executable action, got %d", len(actions))
+	}
+	if actions[0].Type != syncplan.ActionUpdate {
+		t.Fatalf("expected update action to remain, got %v", actions[0].Type)
+	}
+
+	results := m.buildSkippedWorktreeResults()
+	if len(results) != 1 {
+		t.Fatalf("expected 1 skipped result, got %d", len(results))
+	}
+	if results[0].Path != "/tmp/ppst-iter-seq" {
+		t.Fatalf("expected skipped path /tmp/ppst-iter-seq, got %q", results[0].Path)
+	}
+	if results[0].Message != "skipped (user declined)" {
+		t.Fatalf("unexpected skipped message %q", results[0].Message)
+	}
+}
