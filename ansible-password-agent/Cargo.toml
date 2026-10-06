@@ -1,0 +1,10 @@
+[package]
+name = "ansible-password-agent"
+version = "0.2.0"
+edition = "2021"
+description = "Session cache for Ansible vault and become passwords on Linux"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+linux-keyutils = "0.2"
