@@ -9,7 +9,7 @@ use clap::Parser;
 /// --become-password-file (see ansible.cfg).
 ///
 /// Passwords are cached in kernel keyring memory (shared by every process
-/// of the login session) and expire after one hour by default — tune with
+/// of the shell session) and expire after one hour by default — tune with
 /// APA_TIMEOUT_SECS. On a cache miss, the secret is fetched with
 /// `op read`; the 1Password approval happens once, and every later call —
 /// including from coding agents — is prompt-free until expiry.
@@ -69,7 +69,7 @@ fn run() -> Result<()> {
     //    unlocked this is silent; otherwise it prompts exactly once.
     let secret = fetch_from_op(cli.r#type)?;
 
-    // 3. Cache for the whole login session.
+    // 3. Cache for the whole shell session.
     LinuxBackend::set(key, &secret)?;
 
     // 4. Output to stdout for Ansible to consume.
