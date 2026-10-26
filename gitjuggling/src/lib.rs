@@ -13,6 +13,9 @@
 //! into the CLI.
 
 pub mod config;
+pub mod git;
 pub mod gitmodules;
 pub mod remote;
+#[cfg(test)]
+pub mod testing;
 pub mod urlnorm;
