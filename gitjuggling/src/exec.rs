@@ -215,11 +215,11 @@ pub fn execute_actions(
     // Go resolves the token synchronously in ExecuteActions, before any
     // worker starts — keep that (it also keeps `gh auth token` off the
     // worker threads).
-    let (github_token, github_token_err) = match github_clone_token(actions, configured_github_token)
-    {
-        Ok(token) => (token, None),
-        Err(err) => (String::new(), Some(err.to_string())),
-    };
+    let (github_token, github_token_err) =
+        match github_clone_token(actions, configured_github_token) {
+            Ok(token) => (token, None),
+            Err(err) => (String::new(), Some(err.to_string())),
+        };
 
     let concurrency = concurrency.max(1);
     let actions = actions.to_vec();
@@ -364,7 +364,10 @@ pub fn dry_run_action(action: &Action) -> ActionResult {
         },
         ActionType::PruneWorktree => {
             let message = if action.merged {
-                format!("would remove stale worktree and merged branch {}", action.branch)
+                format!(
+                    "would remove stale worktree and merged branch {}",
+                    action.branch
+                )
             } else {
                 format!(
                     "would remove stale worktree (branch {} kept — not fully merged)",
@@ -394,9 +397,12 @@ pub fn execute_action(
 ) -> ActionResult {
     match action.action_type {
         ActionType::Update => execute_update(&action.repo, &action.local_path),
-        ActionType::Move => {
-            execute_move(&action.repo, &action.current_path, &action.expected_path, confirm_fn)
-        }
+        ActionType::Move => execute_move(
+            &action.repo,
+            &action.current_path,
+            &action.expected_path,
+            confirm_fn,
+        ),
         ActionType::PruneWorktree => remove_worktree_and_branch(
             &action.worktree_path,
             &action.main_repo_path,
@@ -404,20 +410,19 @@ pub fn execute_action(
             action.merged,
         ),
         ActionType::Clone => {
-            if action.repo.source == Source::GitHub {
-                if let Some(err) = github_token_err {
-                    return ActionResult {
-                        description: action_desc(&action.repo),
-                        path: path_string(&action.expected_path),
-                        success: false,
-                        message: format!("resolving GitHub token: {err}"),
-                    };
-                }
+            if action.repo.source == Source::GitHub
+                && let Some(err) = github_token_err
+            {
+                return ActionResult {
+                    description: action_desc(&action.repo),
+                    path: path_string(&action.expected_path),
+                    success: false,
+                    message: format!("resolving GitHub token: {err}"),
+                };
             }
             execute_clone(&action.repo, &action.expected_path, github_token)
-        }
-        // Go's `default: "unknown action type"` arms are unreachable here:
-        // the enum is exhaustive.
+        } // Go's `default: "unknown action type"` arms are unreachable here:
+          // the enum is exhaustive.
     }
 }
 
@@ -615,7 +620,10 @@ pub fn push_and_set_upstream(local_path: &Path, remote_name: &str, branch: &str)
         );
     }
 
-    result(true, format!("pushed (tracking set to {remote_name}/{branch})"))
+    result(
+        true,
+        format!("pushed (tracking set to {remote_name}/{branch})"),
+    )
 }
 
 /// Handles the case where the local branch tracks a remote ref that no
@@ -623,7 +631,11 @@ pub fn push_and_set_upstream(local_path: &Path, remote_name: &str, branch: &str)
 /// stale branch **only if it has been merged** (Go:
 /// `execute.ResolveStaleUpstream`, execute.go:127). Refuses outright when
 /// the stale branch *is* the default branch (§4.10).
-pub fn resolve_stale_upstream(local_path: &Path, remote_name: &str, stale_branch: &str) -> ActionResult {
+pub fn resolve_stale_upstream(
+    local_path: &Path,
+    remote_name: &str,
+    stale_branch: &str,
+) -> ActionResult {
     let desc = path_desc(local_path);
     let result = |success: bool, message: String| ActionResult {
         description: desc.clone(),
@@ -653,7 +665,10 @@ pub fn resolve_stale_upstream(local_path: &Path, remote_name: &str, stale_branch
     if !output.status.success() {
         return result(
             false,
-            format!("git checkout {default} failed: {}", combined_trimmed(&output)),
+            format!(
+                "git checkout {default} failed: {}",
+                combined_trimmed(&output)
+            ),
         );
     }
 
@@ -685,7 +700,8 @@ pub fn resolve_stale_upstream(local_path: &Path, remote_name: &str, stale_branch
         );
     }
 
-    let output = match run_git_combined(local_path, &["branch", "-d"], &[OsStr::new(stale_branch)]) {
+    let output = match run_git_combined(local_path, &["branch", "-d"], &[OsStr::new(stale_branch)])
+    {
         Ok(output) => output,
         Err(err) => return result(false, format!("git branch -d {stale_branch} failed: {err}")),
     };
@@ -799,11 +815,7 @@ esac
                 std::process::id()
             ));
             // os.CreateTemp equivalent: O_EXCL creation gives a unique file.
-            let mut file = match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
+            let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(file) => file,
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(err) => return Err(err),

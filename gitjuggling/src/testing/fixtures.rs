@@ -112,10 +112,7 @@ pub fn clone(origin_url: &str, path: &Path) {
         std::fs::create_dir_all(parent).expect("create clone parent dir");
     }
     let dir = path.parent().unwrap_or(Path::new("."));
-    run(
-        dir,
-        &["clone", origin_url, &path.to_string_lossy()],
-    );
+    run(dir, &["clone", origin_url, &path.to_string_lossy()]);
 }
 
 /// Go's `CombinedOutput` equivalent: stdout then stderr, lossily decoded
