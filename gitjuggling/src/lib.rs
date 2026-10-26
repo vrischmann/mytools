@@ -20,6 +20,7 @@ pub mod discover;
 pub mod exec;
 pub mod git;
 pub mod gitmodules;
+pub mod plan;
 pub mod prune;
 pub mod remote;
 #[cfg(test)]
