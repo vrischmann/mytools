@@ -184,7 +184,9 @@ pub fn discover(root: &Path) -> Result<LocalRepos> {
 
         // Skip repos without an origin remote (e.g. bare init, no remotes
         // configured) — the error itself is deliberately discarded, as in Go.
-        let Some(origin_url) = get_remote_url(repo_path, "origin") else { continue };
+        let Some(origin_url) = get_remote_url(repo_path, "origin") else {
+            continue;
+        };
 
         repos.push(LocalRepo {
             path: repo_path.to_owned(),
@@ -267,7 +269,10 @@ fn cmp_walk_order(a: &Path, b: &Path) -> Ordering {
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
             (Some(x), Some(y)) => {
-                let ord = x.as_os_str().as_encoded_bytes().cmp(y.as_os_str().as_encoded_bytes());
+                let ord = x
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .cmp(y.as_os_str().as_encoded_bytes());
                 if ord != Ordering::Equal {
                     return ord;
                 }
@@ -309,7 +314,15 @@ mod tests {
         assert_eq!(worktrees.len(), 1);
         assert_eq!(worktrees[0].path, wt_path);
         assert!(worktrees[0].is_worktree);
-        assert_eq!(worktrees[0].main_path.as_deref(), Some(main_path.as_path()));
+        // git canonicalizes the worktree's gitdir pointer (on macOS it
+        // resolves the /var -> /private/var symlink), so main_path comes
+        // back canonicalized while the fixture paths do not. Go's test
+        // compares raw paths and therefore only passes on Linux; compare
+        // canonicalized paths so the same invariant is tested portably.
+        let got_main = worktrees[0].main_path.as_deref().unwrap();
+        let got_main = std::fs::canonicalize(got_main).unwrap();
+        let expected_main = std::fs::canonicalize(&main_path).unwrap();
+        assert_eq!(got_main, expected_main);
         assert_eq!(
             normalize_url(worktrees[0].remote_urls["origin"].as_str()),
             "git.rischmann.fr/vincent/ppst"
@@ -337,7 +350,11 @@ mod tests {
 
         let local = discover(root).expect("discover");
 
-        assert!(local.find_by_url("ssh://git@git.rischmann.fr/vincent/super.git").is_some());
+        assert!(
+            local
+                .find_by_url("ssh://git@git.rischmann.fr/vincent/super.git")
+                .is_some()
+        );
 
         assert_eq!(local.worktrees().count(), 0);
 

@@ -113,8 +113,14 @@ mod tests {
         let ws = Workspace::default();
 
         let local = LocalRepos::new(vec![
-            local_repo("/home/user/dev/orphan-repo", "https://github.com/someone/orphan-repo.git"),
-            local_repo("/home/user/dev/known-repo", "https://github.com/owner/known-repo.git"),
+            local_repo(
+                "/home/user/dev/orphan-repo",
+                "https://github.com/someone/orphan-repo.git",
+            ),
+            local_repo(
+                "/home/user/dev/known-repo",
+                "https://github.com/owner/known-repo.git",
+            ),
         ]);
 
         let remote_repos = [remote_repo(
@@ -138,8 +144,14 @@ mod tests {
         };
 
         let local = LocalRepos::new(vec![
-            local_repo("/home/user/dev/orphan-repo", "https://github.com/someone/orphan-repo.git"),
-            local_repo("/home/user/dev/known-repo", "https://github.com/owner/known-repo.git"),
+            local_repo(
+                "/home/user/dev/orphan-repo",
+                "https://github.com/someone/orphan-repo.git",
+            ),
+            local_repo(
+                "/home/user/dev/known-repo",
+                "https://github.com/owner/known-repo.git",
+            ),
         ]);
 
         let remote_repos = [remote_repo(
@@ -167,13 +179,20 @@ mod tests {
                 "/home/user/dev/temp-experiment",
                 "https://github.com/someone/temp-experiment.git",
             ),
-            local_repo("/home/user/dev/orphan-repo", "https://github.com/someone/orphan-repo.git"),
+            local_repo(
+                "/home/user/dev/orphan-repo",
+                "https://github.com/someone/orphan-repo.git",
+            ),
         ]);
 
         let remote_repos: [RemoteRepo; 0] = [];
 
         let orphans = find_orphans(&local, &remote_repos, &ws);
-        assert_eq!(orphans.len(), 1, "expected 1 orphan (temp-experiment ignored)");
+        assert_eq!(
+            orphans.len(),
+            1,
+            "expected 1 orphan (temp-experiment ignored)"
+        );
         assert_eq!(orphans[0].name, "orphan-repo");
     }
 }
