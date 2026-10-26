@@ -23,6 +23,7 @@ pub mod gitmodules;
 pub mod plan;
 pub mod prune;
 pub mod remote;
+pub mod state;
 #[cfg(test)]
 pub mod testing;
 pub mod urlnorm;
