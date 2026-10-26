@@ -10,13 +10,17 @@
 //! (config types, YAML load, validate, IsIgnored, ported filepath.Match
 //! ignore matcher, pattern-rule template parser/expander), `gitmodules`
 //! (the .gitmodules parser). M2: `git` (subprocess read ops), `exec`
-//! (worktree removal + tracking-error classifiers so far). Later
+//! (worktree removal + tracking-error classifiers so far), `discover`
+//! (workspace walk, LocalRepo/LocalRepos + URL/path indices, worktree vs
+//! submodule detection), `prune` (`find_orphans`). Later
 //! milestones wire these into the CLI.
 
 pub mod config;
+pub mod discover;
 pub mod exec;
 pub mod git;
 pub mod gitmodules;
+pub mod prune;
 pub mod remote;
 #[cfg(test)]
 pub mod testing;
