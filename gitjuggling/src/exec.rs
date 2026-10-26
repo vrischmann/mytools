@@ -81,7 +81,10 @@ pub fn remove_worktree_and_branch(
         Err(err) => return result(false, format!("git worktree remove failed: {err}")),
     };
     if !output.status.success() {
-        return result(false, format!("git worktree remove failed: {}", combined_trimmed(&output)));
+        return result(
+            false,
+            format!("git worktree remove failed: {}", combined_trimmed(&output)),
+        );
     }
 
     if !delete_branch {
@@ -98,11 +101,17 @@ pub fn remove_worktree_and_branch(
     if !output.status.success() {
         return result(
             false,
-            format!("git branch -d {branch} failed: {}", combined_trimmed(&output)),
+            format!(
+                "git branch -d {branch} failed: {}",
+                combined_trimmed(&output)
+            ),
         );
     }
 
-    result(true, format!("removed stale worktree and merged branch {branch}"))
+    result(
+        true,
+        format!("removed stale worktree and merged branch {branch}"),
+    )
 }
 
 /// Runs `git` with fixed `args` plus extra `operands` in `dir`, collecting the
@@ -161,7 +170,11 @@ mod tests {
                 "git pull --rebase failed: error: could not apply abc1234..def5678",
                 false,
             ),
-            ("stash error", "git stash failed: error: could not stash", false),
+            (
+                "stash error",
+                "git stash failed: error: could not stash",
+                false,
+            ),
             ("empty message", "", false),
         ];
         for &(name, msg, want) in tests {
@@ -188,7 +201,10 @@ mod tests {
         assert!(!wt_path.exists(), "worktree dir should be gone");
 
         let out = branch_list(&main_path, "feature");
-        assert!(out.trim().is_empty(), "merged branch should be deleted, got {out:?}");
+        assert!(
+            out.trim().is_empty(),
+            "merged branch should be deleted, got {out:?}"
+        );
     }
 
     // go test-run: internal/execute/execute_test.go TestRemoveWorktreeAndBranchKeepsUnmergedBranch

@@ -58,7 +58,17 @@ pub fn repo(path: &Path, origin_url: &str) {
 ///
 /// Port of `gittest.Worktree` (gittest.go:42).
 pub fn worktree(repo_path: &Path, path: &Path, branch: &str, diverged: bool) {
-    run(repo_path, &["worktree", "add", "-b", branch, &path.to_string_lossy(), "HEAD"]);
+    run(
+        repo_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            &path.to_string_lossy(),
+            "HEAD",
+        ],
+    );
 
     if diverged {
         std::fs::write(path.join("wip.txt"), "wip").expect("write wip.txt");

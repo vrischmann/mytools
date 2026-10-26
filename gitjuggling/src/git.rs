@@ -84,7 +84,10 @@ pub fn default_branch(local_path: &Path, remote_name: &str) -> Result<String> {
     if !short.starts_with(&prefix) {
         bail!("unexpected default ref {short:?}");
     }
-    Ok(short.strip_prefix(&prefix).expect("prefix checked above").to_owned())
+    Ok(short
+        .strip_prefix(&prefix)
+        .expect("prefix checked above")
+        .to_owned())
 }
 
 /// Reports whether `branch` has been merged into `base`.
@@ -110,7 +113,9 @@ pub fn remote_branch_exists(local_path: &Path, remote_name: &str, branch: &str) 
         &["ls-remote", "--heads", remote_name],
     )?;
     let target = format!("refs/heads/{branch}");
-    Ok(output.split('\n').any(|line| line.trim().ends_with(&target)))
+    Ok(output
+        .split('\n')
+        .any(|line| line.trim().ends_with(&target)))
 }
 
 #[cfg(test)]
@@ -170,11 +175,17 @@ mod tests {
         fixtures::repo(&main_path, "ssh://git@example.com/vincent/demo.git");
         fixtures::worktree(&main_path, &wt_path, "feature", false);
 
-        assert_eq!(current_branch(&main_path).expect("current_branch"), "master");
+        assert_eq!(
+            current_branch(&main_path).expect("current_branch"),
+            "master"
+        );
         assert_eq!(current_branch(&wt_path).expect("current_branch"), "feature");
 
         // Works offline thanks to the fixture's origin/HEAD symbolic ref.
-        assert_eq!(default_branch(&main_path, "origin").expect("default_branch"), "master");
+        assert_eq!(
+            default_branch(&main_path, "origin").expect("default_branch"),
+            "master"
+        );
 
         // A non-diverged worktree branch is merged into master.
         assert!(
@@ -186,7 +197,8 @@ mod tests {
         fixtures::run(&main_path, &["checkout", "--detach"]);
         let err = current_branch(&main_path).expect_err("detached HEAD must fail");
         assert!(
-            err.to_string().contains("repository is in detached HEAD state"),
+            err.to_string()
+                .contains("repository is in detached HEAD state"),
             "got: {err}"
         );
 

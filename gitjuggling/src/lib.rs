@@ -8,11 +8,13 @@
 //! M1: `urlnorm` (URL normalization + https→ssh), `remote`
 //! (RemoteRepo/Source types + Forgejo token resolution), `config`
 //! (config types, YAML load, validate, IsIgnored, ported filepath.Match
-//! ignore matcher, pattern-rule template parser/expander), and
-//! `gitmodules` (the .gitmodules parser). Later milestones wire these
-//! into the CLI.
+//! ignore matcher, pattern-rule template parser/expander), `gitmodules`
+//! (the .gitmodules parser). M2: `git` (subprocess read ops), `exec`
+//! (worktree removal + tracking-error classifiers so far). Later
+//! milestones wire these into the CLI.
 
 pub mod config;
+pub mod exec;
 pub mod git;
 pub mod gitmodules;
 pub mod remote;
