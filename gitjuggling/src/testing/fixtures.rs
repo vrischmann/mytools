@@ -77,6 +77,47 @@ pub fn worktree(repo_path: &Path, path: &Path, branch: &str, diverged: bool) {
     }
 }
 
+/// Creates a **bare** repository at `path` whose single branch `master`
+/// holds one commit ("test" README) and whose HEAD points at
+/// `refs/heads/master`, so clones and default-branch detection work fully
+/// offline. This is the local stand-in for a real "origin" in the M4
+/// end-to-end test (clone/move/update/prune against a local bare repo).
+pub fn bare_repo(path: &Path) {
+    std::fs::create_dir_all(path).expect("create bare repo dir");
+    run(path, &["init", "--bare", "-b", "master", "."]);
+
+    // Seed a master branch with one commit through a scratch work repo.
+    let scratch = tempfile::tempdir().expect("tempdir");
+    run(scratch.path(), &["init", "-b", "master", "."]);
+    std::fs::write(scratch.path().join("README.md"), "test").expect("write README.md");
+    run(scratch.path(), &["add", "."]);
+    run(scratch.path(), &["commit", "-m", "init"]);
+    run(
+        scratch.path(),
+        &["remote", "add", "origin", &path.to_string_lossy()],
+    );
+    run(scratch.path(), &["push", "origin", "master"]);
+
+    // `-b master` already aimed HEAD at master; pin it explicitly so the
+    // fixture does not depend on the git build's default branch.
+    run(path, &["symbolic-ref", "HEAD", "refs/heads/master"]);
+}
+
+/// Clones `origin_url` (a local path or URL) into `path`, creating parent
+/// directories as needed. The clone checks out `master` and, like every
+/// real clone, records `refs/remotes/origin/HEAD` — so default-branch
+/// detection works without further setup.
+pub fn clone(origin_url: &str, path: &Path) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create clone parent dir");
+    }
+    let dir = path.parent().unwrap_or(Path::new("."));
+    run(
+        dir,
+        &["clone", origin_url, &path.to_string_lossy()],
+    );
+}
+
 /// Go's `CombinedOutput` equivalent: stdout then stderr, lossily decoded
 /// (Rust has no interleaving pipe; order is irrelevant for these fixtures).
 fn combined(output: &Output) -> String {
