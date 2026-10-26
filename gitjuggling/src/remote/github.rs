@@ -160,7 +160,13 @@ mod tests {
                 200,
                 &format!(
                     "[{}]",
-                    repo_json("repo1", "alice", false, false, "https://github.com/alice/repo1.git")
+                    repo_json(
+                        "repo1",
+                        "alice",
+                        false,
+                        false,
+                        "https://github.com/alice/repo1.git"
+                    )
                 ),
             ),
             response(200, "[]"),
@@ -208,7 +214,13 @@ mod tests {
                 200,
                 &format!(
                     "[{}]",
-                    repo_json("myrepo", "Alice", true, true, "https://github.com/Alice/myrepo.git")
+                    repo_json(
+                        "myrepo",
+                        "Alice",
+                        true,
+                        true,
+                        "https://github.com/Alice/myrepo.git"
+                    )
                 ),
             ),
             response(200, "[]"),
@@ -262,9 +274,21 @@ mod tests {
                 200,
                 &format!(
                     "[{}, {}, {}]",
-                    repo_json("r1", "Alice", false, false, "https://github.com/Alice/r1.git"),
+                    repo_json(
+                        "r1",
+                        "Alice",
+                        false,
+                        false,
+                        "https://github.com/Alice/r1.git"
+                    ),
                     repo_json("r2", "bob", false, false, "https://github.com/bob/r2.git"),
-                    repo_json("r3", "ALICE", false, false, "https://github.com/ALICE/r3.git"),
+                    repo_json(
+                        "r3",
+                        "ALICE",
+                        false,
+                        false,
+                        "https://github.com/ALICE/r3.git"
+                    ),
                 ),
             ),
             response(200, "[]"),

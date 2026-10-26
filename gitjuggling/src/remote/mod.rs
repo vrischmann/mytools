@@ -150,7 +150,9 @@ impl Transport for UreqTransport {
             request = request.header(name.as_str(), value.as_str());
         }
 
-        let mut response = request.call().map_err(|e| anyhow!("GET {url} failed: {e}"))?;
+        let mut response = request
+            .call()
+            .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
         let status = response.status().as_u16();
         let body = response
             .body_mut()
@@ -313,7 +315,7 @@ mod tests {
             ..forgejo_repo()
         };
 
-        let (github, forgejo) = dedup_repos(vec![github_repo()], vec![duplicate, distinct]);
+        let (github, forgejo) = dedup_repos(vec![github_repo()], vec![duplicate, distinct.clone()]);
 
         assert_eq!(github, vec![github_repo()]);
         assert_eq!(forgejo, vec![distinct]);

@@ -13,8 +13,8 @@
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 
-use super::{RemoteRepo, Source, Transport};
 use super::secrets::forgejo_token;
+use super::{RemoteRepo, Source, Transport};
 use crate::urlnorm::https_to_ssh;
 
 /// Forgejo API repository object (Go: `forgejoRepo`, forgejo.go:16).
@@ -153,8 +153,8 @@ mod tests {
             response(200, "[]"),
         ]);
 
-        let repos = fetch_forgejo_repos(&transport, "https://git.example.com/", "vincent", "tok")
-            .unwrap();
+        let repos =
+            fetch_forgejo_repos(&transport, "https://git.example.com/", "vincent", "tok").unwrap();
 
         assert_eq!(repos.len(), 1);
         let requests = transport.requests();
@@ -190,15 +190,25 @@ mod tests {
                         true,
                         "https://git.example.com/vincent/mirror1.git",
                     ),
-                    repo_json("plain", "vincent", false, "https://git.example.com/vincent/plain"),
-                    repo_json("slash", "vincent", false, "https://git.example.com/vincent/slash/"),
+                    repo_json(
+                        "plain",
+                        "vincent",
+                        false,
+                        "https://git.example.com/vincent/plain"
+                    ),
+                    repo_json(
+                        "slash",
+                        "vincent",
+                        false,
+                        "https://git.example.com/vincent/slash/"
+                    ),
                 ),
             ),
             response(200, "[]"),
         ]);
 
-        let repos = fetch_forgejo_repos(&transport, "https://git.example.com", "vincent", "tok")
-            .unwrap();
+        let repos =
+            fetch_forgejo_repos(&transport, "https://git.example.com", "vincent", "tok").unwrap();
 
         assert_eq!(
             repos,
@@ -233,8 +243,8 @@ mod tests {
     fn empty_first_page_stops_after_one_request() {
         let transport = CannedTransport::new(vec![response(200, "[]")]);
 
-        let repos = fetch_forgejo_repos(&transport, "https://git.example.com", "vincent", "tok")
-            .unwrap();
+        let repos =
+            fetch_forgejo_repos(&transport, "https://git.example.com", "vincent", "tok").unwrap();
 
         assert!(repos.is_empty());
         assert_eq!(transport.requests().len(), 1);

@@ -604,7 +604,7 @@ mod tests {
     // Go: internal/syncplan/syncplan_test.go TestBuildPlanMoveDestinationOccupied
     #[test]
     fn test_build_plan_move_destination_occupied() {
-        let mut ws = test_workspace();
+        let ws = test_workspace();
 
         // Fork repo — rules say it goes to /home/user/dev/forks/
         let repo = make_repo("nvim-treesitter", "vrischmann", true, false);
