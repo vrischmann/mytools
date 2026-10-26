@@ -36,7 +36,7 @@
 
 use std::process;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand};
 
 /// Repository sync and git command runner
 #[derive(Parser)]
