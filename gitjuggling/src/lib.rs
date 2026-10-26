@@ -5,9 +5,14 @@
 //! compile and test on their own (`cargo test -p gitjuggling`) until later
 //! milestones hook them into the CLI (RUST_REWRITE_PLAN.md §2, §5).
 //!
-//! M1 status: `urlnorm` (URL normalization + https→ssh) and `remote`
-//! (RemoteRepo/Source types + Forgejo token resolution). `config` and
-//! `gitmodules` are wired by their own milestone worker.
+//! M1: `urlnorm` (URL normalization + https→ssh), `remote`
+//! (RemoteRepo/Source types + Forgejo token resolution), `config`
+//! (config types, YAML load, validate, IsIgnored, ported filepath.Match
+//! ignore matcher, pattern-rule template parser/expander), and
+//! `gitmodules` (the .gitmodules parser). Later milestones wire these
+//! into the CLI.
 
+pub mod config;
+pub mod gitmodules;
 pub mod remote;
 pub mod urlnorm;

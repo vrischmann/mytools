@@ -184,7 +184,10 @@ impl Parser<'_> {
     }
 
     fn eat_whitespace(&mut self) {
-        while matches!(self.input.as_bytes().first(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+        while matches!(
+            self.input.as_bytes().first(),
+            Some(b' ' | b'\t' | b'\n' | b'\r')
+        ) {
             self.input = &self.input[1..];
         }
     }
@@ -253,8 +256,14 @@ mod tests {
 ";
         let result = parse(input).unwrap();
 
-        assert!(result.contains("mypath"), "expected Contains(mypath) to be true");
-        assert!(!result.contains("otherpath"), "expected Contains(otherpath) to be false");
+        assert!(
+            result.contains("mypath"),
+            "expected Contains(mypath) to be true"
+        );
+        assert!(
+            !result.contains("otherpath"),
+            "expected Contains(otherpath) to be false"
+        );
     }
 
     // Extra pins on the hand-written parser's edge behavior (§4.8-adjacent:

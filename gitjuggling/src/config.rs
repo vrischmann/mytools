@@ -27,7 +27,11 @@ use serde::Deserialize;
 pub struct Config {
     #[serde(default, deserialize_with = "yaml_null_as_default")]
     pub default_workspace: String,
-    #[serde(default, deserialize_with = "yaml_null_as_default")]
+    #[serde(
+        default,
+        rename = "workspace",
+        deserialize_with = "yaml_null_as_default"
+    )]
     pub workspaces: BTreeMap<String, Option<Workspace>>,
 }
 
@@ -63,9 +67,12 @@ impl Workspace {
     /// case-insensitively (both sides lowercased, as in Go). A malformed
     /// pattern is treated as *no match*, not an error.
     pub fn is_ignored(&self, name: &str) -> bool {
-        self.ignore
-            .iter()
-            .any(|pattern| matches!(match_pattern(&pattern.to_lowercase(), &name.to_lowercase()), Ok(true)))
+        self.ignore.iter().any(|pattern| {
+            matches!(
+                match_pattern(&pattern.to_lowercase(), &name.to_lowercase()),
+                Ok(true)
+            )
+        })
     }
 }
 
@@ -95,12 +102,17 @@ impl Rules {
             if rule.pattern.is_empty() {
                 bail!("rules.patterns[{i}]: pattern is empty");
             }
-            let re = Regex::new(&rule.pattern)
-                .map_err(|err| anyhow!("rules.patterns[{i}]: invalid regex {:?}: {err}", rule.pattern))?;
+            let re = Regex::new(&rule.pattern).map_err(|err| {
+                anyhow!(
+                    "rules.patterns[{i}]: invalid regex {:?}: {err}",
+                    rule.pattern
+                )
+            })?;
             if rule.to.is_empty() {
                 bail!("rules.patterns[{i}]: to is empty");
             }
-            validate_pattern_template(&rule.to, &re).with_context(|| format!("rules.patterns[{i}]"))?;
+            validate_pattern_template(&rule.to, &re)
+                .map_err(|err| anyhow!("rules.patterns[{i}]: {err}"))?;
         }
         Ok(())
     }
@@ -137,15 +149,17 @@ where
 /// Every workspace's pattern rules are validated; a null workspace value is
 /// skipped, as Go's `LoadFrom` skips a nil `*Workspace`.
 pub fn load_from(path: &Path) -> Result<Config> {
-    let data =
-        std::fs::read_to_string(path).with_context(|| format!("failed to read config file {}", path.display()))?;
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
 
-    let cfg: Config =
-        serde_yaml_ng::from_str(&data).with_context(|| format!("failed to parse config file {}", path.display()))?;
+    let cfg: Config = serde_yaml_ng::from_str(&data)
+        .with_context(|| format!("failed to parse config file {}", path.display()))?;
 
     for (name, ws) in &cfg.workspaces {
         let Some(ws) = ws else { continue };
-        ws.rules.validate().with_context(|| format!("workspace {name:?}"))?;
+        ws.rules
+            .validate()
+            .map_err(|err| anyhow!("workspace {name:?}: {err}"))?;
     }
 
     Ok(cfg)
@@ -175,7 +189,11 @@ impl Config {
     /// for a null workspace entry (which panics on first use); here that is
     /// reported as not found instead.
     pub fn get_workspace(&self, name: &str) -> Result<&Workspace> {
-        let name = if name.is_empty() { self.default_workspace.as_str() } else { name };
+        let name = if name.is_empty() {
+            self.default_workspace.as_str()
+        } else {
+            name
+        };
 
         if name.is_empty() {
             bail!("no workspace specified and no default_workspace configured");
@@ -207,10 +225,7 @@ impl Config {
 pub fn expand_template(caps: &Captures<'_>, template: &str) -> String {
     let mut dst = String::new();
     let mut template = template;
-    loop {
-        let Some((before, after)) = template.split_once('$') else {
-            break;
-        };
+    while let Some((before, after)) = template.split_once('$') {
         dst.push_str(before);
         template = after;
         if template.starts_with('$') {
@@ -256,10 +271,7 @@ fn validate_pattern_template(tmpl: &str, re: &Regex) -> Result<()> {
     let names: Vec<&str> = re.capture_names().flatten().collect();
     let mut refs = 0;
     let mut s = tmpl;
-    loop {
-        let Some((_, after)) = s.split_once('$') else {
-            break;
-        };
+    while let Some((_, after)) = s.split_once('$') {
         s = after;
         if s.starts_with('$') {
             // $$ is an escaped dollar sign, not a reference.
@@ -319,7 +331,6 @@ fn extract_ref(s: &str) -> Option<(&str, i64, &str)> {
         return None;
     }
     let name = &s[..i];
-    let mut i = i;
     if brace {
         if i >= bytes.len() || bytes[i] != b'}' {
             // missing closing brace
@@ -424,7 +435,7 @@ pub fn match_pattern(pattern: &str, name: &str) -> Result<bool, MatchError> {
                             i += 1;
                             continue;
                         }
-                        name = &name[i + 1..];
+                        name = t;
                         continue 'pattern;
                     }
                     Ok((_t, false)) => i += 1,
@@ -609,7 +620,10 @@ workspace:
 
         assert!(cfg.default_workspace.is_empty());
 
-        let ws = cfg.workspaces.get("personal").expect("expected workspace 'personal' to exist");
+        let ws = cfg
+            .workspaces
+            .get("personal")
+            .expect("expected workspace 'personal' to exist");
         let ws = ws.as_ref().unwrap();
 
         assert_eq!(ws.root, "/home/user/dev");
@@ -708,7 +722,10 @@ workspace:
         let cfg = parse_yaml(input).unwrap();
 
         let ws = cfg.workspaces["personal"].as_ref().unwrap();
-        assert_eq!(ws.ignore, vec!["dotfiles".to_string(), "temp-*".to_string()]);
+        assert_eq!(
+            ws.ignore,
+            vec!["dotfiles".to_string(), "temp-*".to_string()]
+        );
     }
 
     // go test-run: internal/config/config_test.go TestIsIgnored
@@ -867,7 +884,8 @@ workspace:
 
         let err = load_from(&path).expect_err("expected error");
         assert!(
-            err.to_string().contains("must reference at least one capture"),
+            err.to_string()
+                .contains("must reference at least one capture"),
             "error {err:#} does not mention the missing capture reference"
         );
     }
@@ -898,8 +916,14 @@ workspace:
         assert_eq!(personal.rules.archived, "/home/user/dev/archived");
         assert_eq!(personal.rules.patterns.len(), 1);
         assert_eq!(personal.rules.patterns[0].pattern, "^workspace-(.+)$");
-        assert_eq!(personal.rules.patterns[0].to, "/home/user/dev/workspaces/$1");
-        assert_eq!(personal.ignore, vec!["dotfiles".to_string(), "temp-*".to_string()]);
+        assert_eq!(
+            personal.rules.patterns[0].to,
+            "/home/user/dev/workspaces/$1"
+        );
+        assert_eq!(
+            personal.ignore,
+            vec!["dotfiles".to_string(), "temp-*".to_string()]
+        );
 
         let work = cfg.workspaces["work"].as_ref().unwrap();
         assert_eq!(work.root, "/home/user/work");
@@ -922,7 +946,10 @@ workspace:
     fn test_default_path() {
         let path = default_path().unwrap();
         assert!(path.is_absolute(), "default path {path:?} is not absolute");
-        assert!(path.ends_with("gitjuggling/config.yaml"), "default path {path:?}");
+        assert!(
+            path.ends_with("gitjuggling/config.yaml"),
+            "default path {path:?}"
+        );
     }
 
     // §4.1: expansion must mirror regexp.ExpandString. Every expected value
@@ -941,16 +968,16 @@ workspace:
             ("${nope}", ""),                     // unknown named → empty
             ("p/$$1", "p/$1"),                   // $$ is an escaped dollar
             ("x/$0/y", "x/workspace-foo/y"),
-            ("$0a", ""),       // "0a" parses as a *named* ref, not $0 + "a"
-            ("$1x", ""),       // "1x" parses as a *named* ref, not $1 + "x"
-            ("a/${01}b", "a/b"), // leading zero → named ref → empty
-            ("${100000000}", ""), // 1e8 → numeric, out of range → empty
-            ("${999999999}", ""), // 9 digits → still numeric → out of range
+            ("$0a", ""),           // "0a" parses as a *named* ref, not $0 + "a"
+            ("$1x", ""),           // "1x" parses as a *named* ref, not $1 + "x"
+            ("a/${01}b", "a/b"),   // leading zero → named ref → empty
+            ("${100000000}", ""),  // 1e8 → numeric, out of range → empty
+            ("${999999999}", ""),  // 9 digits → still numeric → out of range
             ("${1234567890}", ""), // ≥ 1e8 mid-parse → named ref → empty
-            ("abc$", "abc$"),  // trailing $ is literal
+            ("abc$", "abc$"),      // trailing $ is literal
             ("$", "$"),
             ("a$$", "a$"),
-            ("$}", "$}"), // malformed ref → literal $
+            ("$}", "$}"),    // malformed ref → literal $
             ("$1$2", "foo"), // $2 out of range for this 1-group pattern
         ];
         for (tmpl, want) in tests {
@@ -977,26 +1004,33 @@ workspace:
     fn test_validate_template_numeric_boundaries() {
         let re = Regex::new(r"^workspace-(.+)$").unwrap();
 
-        let err = validate_pattern_template("/ws/${999999999}", &re).expect_err("numeric out of range");
+        let err =
+            validate_pattern_template("/ws/${999999999}", &re).expect_err("numeric out of range");
         assert!(
-            err.to_string().contains("$999999999 refers to a non-existent group"),
+            err.to_string()
+                .contains("$999999999 refers to a non-existent group"),
             "{err}"
         );
 
-        let err = validate_pattern_template("/ws/${1234567890}", &re).expect_err("overflow → named");
+        let err =
+            validate_pattern_template("/ws/${1234567890}", &re).expect_err("overflow → named");
         assert!(
             err.to_string().contains("$1234567890 is not a named group"),
             "{err}"
         );
 
         let err = validate_pattern_template("/ws/${01}", &re).expect_err("leading zero → named");
-        assert!(err.to_string().contains("$01 is not a named group"), "{err}");
+        assert!(
+            err.to_string().contains("$01 is not a named group"),
+            "{err}"
+        );
 
         // $1 is in range, ${100000000} (1e8) is numeric but out of range.
         assert!(validate_pattern_template("/ws/$1", &re).is_ok());
         let err = validate_pattern_template("/ws/${100000000}", &re).expect_err("1e8 out of range");
         assert!(
-            err.to_string().contains("$100000000 refers to a non-existent group"),
+            err.to_string()
+                .contains("$100000000 refers to a non-existent group"),
             "{err}"
         );
     }
