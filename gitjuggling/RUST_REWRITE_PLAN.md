@@ -105,7 +105,7 @@ gitjuggling/            # replaces the Go dir in place, becomes a workspace memb
     ├── urlnorm.rs      # NormalizeURL, https→ssh
     ├── gitmodules.rs
     ├── discover.rs     # walk + LocalRepo/LocalRepos + indices
-    ├── git.rs          # read ops (git2) + network read ops (ls-remote via CLI)
+    ├── git.rs          # all git access as subprocesses (decision G), env/askpass wrapper
     ├── remote/{github.rs, forgejo.rs, secrets.rs}
     ├── plan.rs         # classify + BuildPlan + Action/ActionType
     ├── state.rs        # durable plan JSON
@@ -132,6 +132,7 @@ nobody wastes time hunting for their callers.
 | YAML | gopkg.in/yaml.v3 | `serde_yaml_ng` 0.10 + `serde` | maintained fork of `serde_yaml` (libyaml-backed); `serde_yaml` itself is deprecated/unmaintained |
 | JSON | encoding/json | `serde_json` | plan file (shape contract §7F), API responses |
 | HTTP | net/http | `ureq` 3 (blocking) | no async runtime needed; **must set an explicit 30s timeout** — ureq has no default (§4.12) |
+| Git | `os/exec` on `git` | `std::process::Command` on `git` | decision G: subprocess only, **no git2**; port the env/askpass wrapper from `internal/git.go` |
 | Regex | regexp | `regex` 1 | see §4.1 |
 | Glob | filepath.Match | port Go's `filepath.Match` (~100 LOC) | `glob` crate is *not* parity-equivalent — see §4.4 |
 | FS walk | filepath.WalkDir | `jwalk` 0.8 (already used in workspace) or `walkdir` | jwalk = parallel dirty checks for free |
@@ -276,10 +277,12 @@ further quirks ride along:
 - `CombinedOutput` merges stdout+stderr into whichever field the exit status picks,
   so an "error" line may contain stdout and vice versa.
 
-Decision E: replicate the quirks (parity) or fix them. Recommend fixing the
-`.gitmodules` lookup (nearest file, per repo) and *naming* the worktree blindness
-in §8 as a known deviation, since changing which repos `exec` visits changes which
-repos the §6.3 comparison covers. Keep `CombinedOutput` semantics.
+Decision E — DECIDED (2026-10-26): fix the `.gitmodules` lookup (nearest file,
+per repo) and **also** make `exec` visit linked worktrees (accept `.git` files,
+not just directories); both are recorded in §8. `CombinedOutput` semantics and the
+basename-vs-path match quirk are kept. The §6.3 exec comparison must therefore
+run on a tree without linked worktrees (or filter worktree paths), since Rust
+visits strictly more repos than Go.
 
 ### 4.9 Secrets + subprocess hygiene
 
@@ -352,8 +355,9 @@ If `github_owners` is empty and Forgejo is unconfigured, both fetches return emp
 lists, `FindOrphans` sees zero known URLs, and **every** non-ignored, non-worktree
 local repo is offered for deletion — including a workspace full of repos that were
 simply never configured. Only the interactive prompt stands between that and data
-loss. That is current Go behavior; the port should reproduce it and record a
-follow-up issue proposing a guard (decision I).
+loss. Decision I — DECIDED (2026-10-26): the port **does not** reproduce this; it
+guards (refuse + exit 1 when the known-remote set is empty and orphan candidates
+exist, informational under `--dry-run`, no new flag) — see §7 I and §8 item 8.
 
 ---
 
@@ -369,7 +373,7 @@ oracle.
 | **M1** | Pure logic: `config` (+validate), `urlnorm`, `gitmodules`, ignore matcher (ported `filepath.Match`), template ref parser + expander, **and the `RemoteRepo` data struct** (needed by M2's `find_orphans`) | M | port config_test, gitmodules_test, remote_test (https→ssh), forgejo_test (token) ≈ 15 tests |
 | **M2** | `discover` + `git` read ops + real-git fixture harness + `prune::find_orphans` | M | port discover_test, prune_test, execute_test(IsDirty/RemoveWorktree…) |
 | **M3** | `remote` clients (GitHub, Forgejo, `op://`, `gh`) behind an injectable transport, dedup, `plan::build_plan` incl. worktree prune | M | port syncplan_test — the big one (509 LOC / 26 tests); HTTP behind a trait with canned JSON fixtures |
-| **M4** | `state` (JSON **to the §7F contract**, atomic, 0600) + `exec` (all git mutations, askpass, bounded runner, dry-run) | M | port execute_test, syncstate_test + a **byte-fixture test**: Go-written plan JSON loads in Rust and re-serializes identically + a temp-repo end-to-end: clone/move/update/prune against a local bare "origin" |
+| **M4** | `state` (JSON: new idiomatic format + legacy-Go fallback parse per §7F, atomic, 0600) + `exec` (all git mutations, askpass, bounded runner, dry-run) | M | port execute_test, syncstate_test + a **legacy-load test**: committed Go-written plan JSON parses and migrates in memory + a temp-repo end-to-end: clone/move/update/prune against a local bare "origin" |
 | **M5a** | Terminal setup + event loop (decision H) + the sync state machine as a **pure** struct with `handle_key`/`handle_msg`, then loading, resume, plan, summary | M | the 8 `tui/sync_test.go` ports run **headless** against the pure state machine, exactly as they do in Go |
 | **M5b** | Confirm phases (dirty / move / worktree) + executing, incl. cancel semantics: `q` stops *scheduling*, in-flight git subprocesses run to completion (no kill-on-drop) | M | port the dirty-confirm keymap test; assert declined-move/declined-dirty removal from the durable plan |
 | **M5c** | Tracking-fix phase, prune list/confirm/done, `exec` progress view, and the §4.11 exit-code matrix wired into `main` | M | exit-code matrix test; manual run against a scratch workspace |
@@ -416,64 +420,84 @@ to what is API-free. Plan:
    dirty repos, and a resume from a Go-written plan file.
 5. Keep the harness in `gitjuggling/tests/parity/` so it survives the cutover.
 
-## 7. Decisions I need from you
+## 7. Decisions (all nine settled 2026-10-26)
 
-- **A. TUI rendering style.** `ratatui` 0.30.2 is the only serious option (with
-  `crossterm` 0.29). Sub-decision: reproduce Bubbletea's *render-to-string* style
-  (hand-built styled line buffers → closest visual parity, most boilerplate) vs
-  idiomatic ratatui widgets (`Paragraph`/`List`/`Gauge`; cleaner, but spacing and
-  color drift). Either way two bubbles widgets have to be **written**, not picked:
-  a tick-driven spinner (loading phase) and a scrollable viewport with bubbles'
-  keymap (pgup/pgdn, b/f, u/d, j/k) for the plan view.
-- **B. Async.** Recommend **no tokio**: `std::thread::scope` + `mpsc` +
-  blocking `ureq` + `jwalk`. Matches the rest of the workspace, fewer deps.
-- **C. Errors.** Recommend `anyhow` (as `cargo-target-clean`), not `onlyerror`
-  (as `git-stacked`) — this binary is all orchestration glue. But note: `main` must
-  **not** return `Result` naively, because §4.11's exit-code matrix needs failures
-  that Go reports with exit 0.
-- **D. Scope of `init`.** Keep it as-is, or replace the 60-LOC anonymous-struct YAML
-  dump with a commented YAML template string. Recommend the template string — but
-  record in §8 that this changes the bytes `init` emits today (dir 0755, file 0644,
-  `omitempty` field set, no comments), keeping the exists-check and the file modes.
-- **E. exec's `.gitmodules` quirk (§4.8).** Replicate or fix; if fixed, also decide
-  whether `exec` should start seeing linked worktrees (it cannot today).
-- **F. Plan-file JSON contract.** Recommend byte-compatibility so a Go-started plan
-  can be finished by the Rust binary during the transition. That is only meaningful
-  if the shape is spelled out, and Go's structs have no `json` tags, so today's wire
-  format is:
+- **A. TUI rendering style — DECIDED (2026-10-26): idiomatic ratatui widgets.**
+  `ratatui` 0.30.2 (latest) + `crossterm` 0.29 (ratatui's own default backend version;
+  keep the direct dep on the same major). Render each phase with ratatui widgets
+  (`Paragraph`/`List`/`Gauge`), NOT Bubbletea's render-to-string style: spacing and
+  color drift vs the Go TUI is accepted and recorded in §8. One deliberate
+  non-drift: use an **inline viewport** (`Viewport::Inline`), not the alt screen, so
+  the final summary frame stays in terminal scrollback after exit, as in Go.
+  The two bubbles widgets are still **written**, not picked: a tick-driven spinner
+  (loading phase) and a scrollable plan view with bubbles' keymap (pgup/pgdn, b/f,
+  u/d, j/k).
+- **B. Async — DECIDED (2026-10-26): no tokio.** `std::thread::scope` + `std::sync::mpsc`
+  + blocking `ureq` (30s timeout, matching Go's `net/http`) + `jwalk`. Matches the
+  rest of the workspace, fewer deps; the Go binary's concurrency is semaphore-bounded
+  goroutines + result channels, which maps 1:1 onto threads + mpsc.
+- **C. Errors — DECIDED (2026-10-26): `anyhow` + explicit exit-code mapping.**
+  `anyhow` as in `cargo-target-clean` (this binary is orchestration glue, no error
+  hierarchy to consume). `main` does **not** return `Result`: it computes the exit
+  code per §4.11's matrix (prune failures → 0, declined tracking fix → 1, post-TUI
+  load errors → 0, pre-TUI errors → 1) and calls `process::exit`; the matrix is
+  pinned by a test in M5/M6.
+- **D. Scope of `init` — DECIDED (2026-10-26): commented YAML template string.**
+  Replace the 60-LOC anonymous-struct marshal with a commented template in the
+  binary (`$HOME` substituted). Keep the exists-check, dir 0755 / file 0644 modes,
+  and the `Config file created at %s` message. §8 item 3 records that the emitted
+  bytes change (comments added, optional forgejo/token keys now visible).
+- **E. exec's `.gitmodules` quirk (§4.8) — DECIDED (2026-10-26): fix lookup, and
+  `exec` starts seeing linked worktrees.** Nearest `.gitmodules` per repo replaces
+  last-file-wins (§8 item 4); discovery now accepts `.git` *files* (linked
+  worktrees) in addition to `.git` directories, so `exec` visits worktrees it never
+  visited in Go (also §8 item 4 — note this changes which repos the §6.3 exec
+  comparison covers; the harness must compare on a tree without linked worktrees
+  or filter worktree paths). Keep the basename-vs-path match quirk and
+  `CombinedOutput` semantics as-is.
+- **F. Plan-file JSON contract — DECIDED (2026-10-26): idiomatic serde format,
+  with load-time migration from Go files.** The plan file gets a clean Rust wire
+  format: snake_case field names, string-tagged enums, standard serde presence,
+  2-space pretty JSON, atomic save, 0600. `load` parses the new format first and
+  falls back to the legacy Go format (below), migrating in memory; `save` always
+  writes the new format, so a pending Go plan migrates on its first save. No
+  standalone migration command. The legacy Go wire format (kept for the fallback
+  parser) is:
   - wrapper `{"actions": [ … ]}`, `MarshalIndent` with **2 spaces**;
   - **PascalCase** field names, because Go exports them: `Type`, `Repo`, `LocalPath`,
     `CurrentPath`, `ExpectedPath`, `AlreadyInPlace`, `WorktreePath`, `MainRepoPath`,
     `Branch`, `Merged`; inside `Repo`: `Name`, `Owner`, `IsFork`, `IsArchived`,
     `IsMirror`, `CloneURL`, `Source`;
   - enums as **ints** (`Update`=0, `Move`=1, `Clone`=2, `PruneWorktree`=3;
-    `GitHub`=0, `Forgejo`=1) — serde must not use string tags;
+    `GitHub`=0, `Forgejo`=1) — the fallback parser must use int variants, not
+    string tags;
   - **no `omitempty`**: every field is always present, including empty strings and
     `false` (confirmed against the real `plans/.json` on disk);
-  - in serde: `#[serde(rename_all = "PascalCase")]`, untagged/int enums via
-    `#[serde(rename = "0")]`-style or a custom serializer, and **no**
-    `skip_serializing_if` anywhere.
-  Pin it with a byte-fixture test in M4 (load a Go-written file, re-serialize,
-  compare bytes).
-- **G. git2 vs git CLI.** Recommend: shell out for everything that mutates
-  (`stash`, `pull --rebase`, `clone`, `push -u`, `checkout`, `branch -d`,
-  `worktree remove`, `ls-remote`) so stderr text stays identical — §4.10's
-  substring checks depend on it — and also for `status --porcelain` and
-  `remote get-url` (§4.7). `git2` then earns its place only for
-  `rev-parse`/`symbolic-ref`-style reads, if at all; consider dropping it entirely.
-- **H. TUI event-loop architecture (new, prerequisite for M5a).** How crossterm key
-  events, worker-thread `ActionResult`s, spinner ticks and `Resize` merge into one
-  loop, and how the state machine stays a pure struct so the 8 `tui/sync_test` ports
-  run headless. Also fixes cancel semantics: `q` stops *scheduling* new actions while
-  in-flight git subprocesses run to completion (Go's behavior). Recommend:
-  `crossterm::event::EventStream`-free design — one thread reading keys, workers on
-  an `mpsc`, a tick interval, all selected in a single blocking loop — paired with a
-  `SyncApp` struct whose `handle_key`/`handle_msg` return state transitions plus
-  commands, mirroring bubbletea's `Model` contract so the ported tests transfer
-  almost line for line.
-- **I. Prune with no known remotes (§4.13).** With both remotes unconfigured, Go
-  offers to delete every local repo. Reproduce for parity and file a follow-up for a
-  guard, or add the guard now as a deliberate deviation? Recommend parity + issue.
+  - in the fallback parser: `#[serde(rename_all = "PascalCase")]`, int enums via
+    `#[serde(rename = "0")]`-style variants, and **no**
+    `skip_serializing_if` anywhere (every field is always present).
+  M4 pins it with a legacy-load test (committed Go-written plan JSON parses and
+  migrates) plus a new-format round-trip test.
+- **G. git2 vs git CLI — DECIDED (2026-10-26): shell out everywhere, no git2.**
+  Every git operation is a `git` subprocess (Go does exactly this; no library in
+  the tree), so stderr text and §4.10's substring contracts are preserved for
+  free and the crate stays pure-Rust. No git2 dependency at all (§3's Git row).
+- **H. TUI event-loop architecture (new, prerequisite for M5a) — DECIDED
+  (2026-10-26): pure `SyncApp` state machine + thin single-loop runtime.** One
+  thread reads crossterm keys, workers feed an `mpsc`, ticks come off an interval,
+  resize joins the same channel — all consumed by one blocking loop. No
+  `crossterm::event::EventStream`, no async (per B). `SyncApp` owns no terminal:
+  `handle_key`/`handle_msg` take plain enums and return state transitions plus
+  commands, mirroring bubbletea's `Model` contract so the 8 `tui/sync_test` ports
+  run headless. Cancel semantics pinned to Go: `q` stops *scheduling* new actions
+  while in-flight git subprocesses run to completion.
+- **I. Prune with no known remotes (§4.13) — DECIDED (2026-10-26): add the guard
+  now, deliberate §8 deviation.** When the set of known remote URLs is empty
+  (no `github_owners`, Forgejo unconfigured or empty), prune refuses to build
+  prune actions: the run reports the refusal plus the count of would-be orphans
+  and exits **1** (informational, exit 0, under `--dry-run`). No new CLI flag —
+  the surface stays as §1. Implemented with the prune flow in M3, with tests
+  (empty known-set + orphans → refuse; configured remotes → unchanged Go behavior).
 
 ## 8. Out of scope, and deviations we are accepting
 
@@ -489,8 +513,22 @@ README at cutover):
 2. **Parallel dirty check** — faster, same result set (§4.7).
 3. **`init` output bytes** — commented template instead of a marshalled anonymous
    struct (decision D).
-4. **`exec` `.gitmodules` lookup** — nearest-file per repo instead of
-   last-file-wins (decision E).
+4. **`exec` discovery** — nearest `.gitmodules` per repo instead of
+   last-file-wins, and linked worktrees (`.git` files) are now visited, unlike Go
+   (decision E). The M6/§6.3 exec comparison runs on a tree without linked
+   worktrees, or filters worktree paths out of the diff.
 5. **Internal, not observable:** the declined-action string match replaced by an
    action id (§4.10), and the dead `byName` index / `ConfirmModel` not ported (§2).
+6. **TUI visuals** — idiomatic ratatui widgets replace Bubbletea's hand-built
+   render-to-string frames: spacing, borders, and colors differ from the Go TUI
+   (decision A). Keymap, phase flow, and the inline (scrollback-preserving)
+   rendering mode are kept.
+7. **Plan-file JSON format** — idiomatic serde (snake_case, string enums) replaces
+   Go's PascalCase/int wire format; `load` accepts the legacy Go format and migrates
+   in memory, `save` writes only the new format (decision F).
+8. **Prune with no known remotes** — guarded, unlike Go: prune refuses (exit 1,
+   explanatory message, count of would-be orphans) when no remote is configured and
+   orphan candidates exist; `--dry-run` reports the refusal informationally. No new
+   CLI flag (decision I). This is the one place the port is deliberately *safer*
+   than the Go binary, and the only place `sync`'s exit code differs from Go.
 
