@@ -1,0 +1,84 @@
+{
+  "actions": [
+    {
+      "Type": 2,
+      "Repo": {
+        "Name": "tools",
+        "Owner": "acme",
+        "IsFork": true,
+        "IsArchived": false,
+        "IsMirror": false,
+        "CloneURL": "git@github.com:acme/tools.git",
+        "Source": 0
+      },
+      "LocalPath": "",
+      "CurrentPath": "",
+      "ExpectedPath": "/home/user/workspaces/forks/tools",
+      "AlreadyInPlace": false,
+      "WorktreePath": "",
+      "MainRepoPath": "",
+      "Branch": "",
+      "Merged": false
+    },
+    {
+      "Type": 0,
+      "Repo": {
+        "Name": "api",
+        "Owner": "acme",
+        "IsFork": false,
+        "IsArchived": false,
+        "IsMirror": false,
+        "CloneURL": "https://github.com/acme/api.git",
+        "Source": 0
+      },
+      "LocalPath": "/home/user/workspaces/acme/api",
+      "CurrentPath": "",
+      "ExpectedPath": "/home/user/workspaces/acme/api",
+      "AlreadyInPlace": true,
+      "WorktreePath": "",
+      "MainRepoPath": "",
+      "Branch": "",
+      "Merged": false
+    },
+    {
+      "Type": 1,
+      "Repo": {
+        "Name": "infra",
+        "Owner": "acme",
+        "IsFork": false,
+        "IsArchived": true,
+        "IsMirror": false,
+        "CloneURL": "https://forgejo.example.test/acme/infra.git",
+        "Source": 1
+      },
+      "LocalPath": "",
+      "CurrentPath": "/home/user/workspaces/acme/infra",
+      "ExpectedPath": "/home/user/workspaces/archived/infra",
+      "AlreadyInPlace": false,
+      "WorktreePath": "",
+      "MainRepoPath": "",
+      "Branch": "",
+      "Merged": false
+    },
+    {
+      "Type": 3,
+      "Repo": {
+        "Name": "web",
+        "Owner": "acme",
+        "IsFork": false,
+        "IsArchived": false,
+        "IsMirror": false,
+        "CloneURL": "https://github.com/acme/web.git",
+        "Source": 0
+      },
+      "LocalPath": "",
+      "CurrentPath": "",
+      "ExpectedPath": "",
+      "AlreadyInPlace": false,
+      "WorktreePath": "/home/user/workspaces/acme/web/worktrees/feature-api",
+      "MainRepoPath": "/home/user/workspaces/acme/web",
+      "Branch": "feature-api",
+      "Merged": true
+    }
+  ]
+}

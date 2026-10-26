@@ -21,14 +21,17 @@ cargo-install-all:
     @cargo install --path git-stacked
     @cargo install --path cargo-target-clean
     @cargo install --path git-journal
+    @cargo install --path gitjuggling
     @cargo install --path hf-cache
     @cargo install --path humanize
 
-# Install Go project
-go-install-all:
-    cd gitjuggling && go install .
 # Install all workspace binaries
-install-all: cargo-install-all go-install-all
+install-all: cargo-install-all
+
+# Build the Go oracle used by the parity harness (gitjuggling/tests/parity.rs).
+# The Go tree is removed at cutover; until then it stays as the port's oracle.
+go-build-oracle:
+    go build -o /tmp/gitjuggling-go ./gitjuggling
 # Show available modules
 list-modules:
     @echo "Available modules:"

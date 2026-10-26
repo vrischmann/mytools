@@ -1,0 +1,36 @@
+# Redacted copy of the live gitjuggling config (RUST_REWRITE_PLAN.md §4.6).
+#
+# CI cannot read ~/Library/Application Support/gitjuggling/config.yaml, and a
+# test that silently skips when the file is missing proves nothing, so this
+# fixture pins the dialect the live file uses: 4-space-indented maps, op://
+# 1Password references as token values, a workspace map, pattern rules, an
+# ignore list, and an explicit empty (`github_token:`) value. All values are
+# placeholders; nothing here is secret (an op:// reference is a pointer).
+default_workspace: personal
+
+workspace:
+    personal:
+        root: /home/user/dev
+        github_owners:
+            - vrischmann
+        github_token:
+        forgejo_url: https://git.example.com
+        forgejo_user: vincent
+        forgejo_token: "op://Vault/Item/Field"
+        rules:
+            base: /home/user/dev/repos
+            forks: /home/user/dev/forks
+            archived: /home/user/dev/archived
+            patterns:
+                - pattern: ^workspace-(.+)$
+                  to: /home/user/dev/workspaces/$1
+        ignore:
+            - dotfiles
+            - temp-*
+
+    work:
+        root: /home/user/work
+        github_owners:
+            - MyOrg
+        rules:
+            base: /home/user/work/repos
