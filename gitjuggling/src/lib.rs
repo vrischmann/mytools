@@ -26,4 +26,5 @@ pub mod remote;
 pub mod state;
 #[cfg(test)]
 pub mod testing;
+pub mod tui;
 pub mod urlnorm;
