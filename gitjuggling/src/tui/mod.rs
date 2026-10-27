@@ -9,6 +9,7 @@
 
 mod app;
 mod exec;
+mod inline;
 pub mod styles;
 mod sync;
 mod view;

@@ -56,6 +56,13 @@ pub fn fetch_forgejo_repos(
     user: &str,
     token_ref: &str,
 ) -> Result<Vec<RemoteRepo>> {
+    // Go's TUI command skips the fetch when Forgejo is unconfigured (any of
+    // url/user/token empty) — before token resolution or HTTP. Mirror that
+    // so an unconfigured workspace loads offline.
+    if base_url.is_empty() || user.is_empty() || token_ref.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let token = forgejo_token(token_ref)?;
 
     let mut repos = Vec::new();

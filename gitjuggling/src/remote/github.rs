@@ -56,6 +56,13 @@ pub fn fetch_github_repos(
     owners: &[String],
     github_token: &str,
 ) -> Result<Vec<RemoteRepo>> {
+    // Go's TUI command short-circuits an empty owner list before any
+    // token resolution or HTTP: mirror that observable behavior (no gh
+    // subprocess, no request) so an owner-less workspace loads offline.
+    if owners.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let token = super::secrets::github_token(github_token)?;
     let all_repos = fetch_authenticated_user_repos(transport, &token)?;
 

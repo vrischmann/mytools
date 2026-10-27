@@ -6,7 +6,7 @@ This is a Cargo workspace containing personal utility tools. Each tool is a stan
 
 Workspace members: `git-stacked`, `cargo-target-clean`, `git-journal`.
 
-Note: `gitjuggling` was ported to Go and lives in the same directory but is built separately with `go build`.
+Note: `gitjuggling` has been ported to Rust and is a regular Cargo workspace member (`cargo build -p gitjuggling`). The original Go implementation remains in the tree temporarily as the parity oracle (`go build ./gitjuggling` from the repo root; the Go module is at the root) and is removed at cutover.
 
 ## Build Commands
 
@@ -21,7 +21,7 @@ cargo build --workspace
 cargo check --workspace
 cargo clippy --workspace -- -D warnings
 
-# Run tests
+# Run tests (gitjuggling includes a Go-oracle parity harness; it skips when go is unavailable)
 cargo test --workspace
 
 # Format check
@@ -83,16 +83,19 @@ Each crate has its own `Cargo.toml` with independent dependencies. Common depend
 
 ## Tool-Specific Notes
 
-### gitjuggling (Go)
+### gitjuggling (Rust, ported from Go)
 
-- Ported from Rust to Go with Bubbletea TUI
-- Located in `gitjuggling/` but is NOT part of the Cargo workspace
-- Build with `cd gitjuggling && go build .`
-- Test with `cd gitjuggling && go test ./...`
+- Ported at behavior parity; a Cargo workspace member (edition 2024)
+- Build/test: `cargo build -p gitjuggling`, `cargo test -p gitjuggling`
 - Uses YAML config (`<UserConfigDir>/gitjuggling/config.yaml`)
-- Dependencies: bubbletea, bubbles, lipgloss, cobra, yaml.v3, x/sync
-- Two subcommands: `sync` (multi-phase TUI) and `exec` (progress bar TUI)
-- Has its own `justfile` with build/test/check/install recipes
+- Dependencies: ratatui, crossterm, clap, ureq, serde, jwalk
+- Subcommands: `sync` (multi-phase TUI), `exec` (progress TUI), `init`
+- `RUST_REWRITE_PLAN.md` in `gitjuggling/` is the port's contract: decisions,
+  behavior-parity pins, and the §8 deviations list
+- `gitjuggling/tests/parity.rs` runs cross-binary parity against the Go
+  oracle under a pty; it skips when `go` is unavailable
+- The Go tree (`gitjuggling/cmd`, `gitjuggling/internal`, `gitjuggling/main.go`)
+  stays until cutover as the oracle; do not modify it
 
 ### git-stacked (v0.1.0, edition 2024)
 - No CLI arguments — runs in the current git repository

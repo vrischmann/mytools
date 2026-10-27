@@ -7,9 +7,6 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use ratatui::backend::CrosstermBackend;
-use ratatui::widgets::Paragraph;
-
 use super::styles;
 use super::widgets::{Spinner, TICK_INTERVAL};
 use ratatui::style::Stylize;
@@ -208,7 +205,7 @@ impl ExecApp {
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled("Failed:   ", styles::label()),
-            Span::raw(""),
+            Span::raw(" "),
             Span::styled(failed.len().to_string(), styles::error()),
         ]));
         lines.push(Line::from(vec![
@@ -232,15 +229,10 @@ enum Event {
 pub fn run_exec(app: &mut ExecApp, depth: usize, concurrency: usize) -> anyhow::Result<bool> {
     let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
     let viewport_height = height.min(40);
+    let _ = (width, viewport_height);
 
     crossterm::terminal::enable_raw_mode()?;
-    let mut terminal = ratatui::Terminal::with_options(
-        CrosstermBackend::new(std::io::stdout()),
-        ratatui::TerminalOptions {
-            viewport: ratatui::Viewport::Inline(viewport_height),
-        },
-    )?;
-    terminal.hide_cursor()?;
+    let mut inline = super::inline::Inline::new();
 
     let result = (|| -> anyhow::Result<bool> {
         let (tx, rx) = std::sync::mpsc::channel::<Event>();
@@ -312,17 +304,14 @@ pub fn run_exec(app: &mut ExecApp, depth: usize, concurrency: usize) -> anyhow::
                 }
                 Event::Msg(msg) => app.handle_msg(msg),
             };
+            inline.draw(&app.render())?;
             if exit {
                 break;
             }
-            terminal.draw(|frame| {
-                frame.render_widget(Paragraph::new(app.render()), frame.area());
-            })?;
         }
         Ok(false)
     })();
 
-    terminal.show_cursor()?;
     crossterm::terminal::disable_raw_mode()?;
     result.map(|_| app.has_failures())
 }

@@ -944,15 +944,34 @@ impl SyncApp {
     /// Go: `afterTrackingFix` — the shared tail: prune when asked, then
     /// summary + quit.
     fn after_tracking_fix(&mut self) -> Vec<Cmd> {
+        let all: Vec<RemoteRepo> = self
+            .github_repos
+            .iter()
+            .chain(self.forgejo_repos.iter())
+            .cloned()
+            .collect();
         let orphans = if self.do_prune
             && let Some(local) = self.local_repos.as_ref()
         {
-            let all: Vec<RemoteRepo> = self
-                .github_repos
-                .iter()
-                .chain(self.forgejo_repos.iter())
-                .cloned()
-                .collect();
+            // Decision I (§7/§8 item 8): refuse to offer every local repo
+            // for deletion when the known-remote set is empty. Refusal is
+            // a failure (exit 1); under --dry-run it is informational
+            // (exit 0, shown via the summary's error line).
+            if let Err(err) = plan::guard_empty_known_remotes(local, &all, &self.ws) {
+                if self.dry_run {
+                    self.load_err = Some(err);
+                    self.phase = Phase::Summary;
+                    return vec![Cmd::Quit];
+                }
+                self.failed.push(ActionResult {
+                    description: "prune".to_owned(),
+                    path: String::new(),
+                    success: false,
+                    message: err.to_string(),
+                });
+                self.phase = Phase::Summary;
+                return vec![Cmd::Quit];
+            }
             prune::find_orphans(local, &all, &self.ws)
         } else {
             Vec::new()
@@ -1678,5 +1697,60 @@ mod tests {
         );
         app.with_seams(null_store(), None);
         assert_eq!(matrix_exit(&app), 0);
+    }
+
+    // Decision I: the prune-entry guard — non-dry refusal is a failure
+    // (exit 1), dry-run refusal is informational (exit 0).
+    #[test]
+    fn test_prune_guard_refuses_empty_known_remotes() {
+        let repo = test_repo("vincent", "demo", crate::remote::Source::GitHub);
+        let mut app = test_app();
+        app.do_prune = true;
+        app.local_repos = Some(crate::discover::LocalRepos::new(Vec::new()));
+        // Two local repos with no known remote → orphan candidates.
+        app.local_repos = Some(crate::discover::LocalRepos::new(vec![
+            crate::discover::LocalRepo {
+                path: Path::new("/tmp/a").into(),
+                remote_urls: [(
+                    "origin".to_owned(),
+                    "https://example.com/x/a.git".to_owned(),
+                )]
+                .into_iter()
+                .collect(),
+                is_worktree: false,
+                main_path: None,
+            },
+        ]));
+
+        // Non-dry: refusal lands in failed (exit 1 per §7 I).
+        let cmds = app.after_tracking_fix();
+        assert_eq!(app.phase, Phase::Summary);
+        assert!(matches!(cmds.as_slice(), [Cmd::Quit]));
+        assert_eq!(app.failed.len(), 1, "refusal is a failure");
+        assert!(app.failed[0].message.contains("refusing to prune"));
+        assert!(app.has_failures());
+
+        // Dry-run: informational — load_err, not failed (exit 0).
+        let mut app = test_app();
+        app.do_prune = true;
+        app.dry_run = true;
+        app.local_repos = Some(crate::discover::LocalRepos::new(vec![
+            crate::discover::LocalRepo {
+                path: Path::new("/tmp/a").into(),
+                remote_urls: [(
+                    "origin".to_owned(),
+                    "https://example.com/x/a.git".to_owned(),
+                )]
+                .into_iter()
+                .collect(),
+                is_worktree: false,
+                main_path: None,
+            },
+        ]));
+        app.after_tracking_fix();
+        assert_eq!(app.phase, Phase::Summary);
+        assert!(app.load_err.is_some(), "dry-run refusal is informational");
+        assert!(!app.has_failures());
+        let _ = repo;
     }
 }

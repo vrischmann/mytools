@@ -13,14 +13,11 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
-use ratatui::Terminal;
-use ratatui::backend::{Backend, CrosstermBackend};
-use ratatui::widgets::Paragraph;
-
 use crate::discover;
 use crate::exec;
 use crate::git;
 
+use super::inline::Inline;
 use super::sync::{Key, Msg, SyncApp};
 use super::widgets::{SpinnerTick, TICK_INTERVAL};
 
@@ -32,21 +29,13 @@ pub(crate) enum Event {
 }
 
 /// The production entry (Go: `cmd/sync.go`'s `tea.NewProgram(model).Run()`):
-/// raw mode, an inline viewport, the reader/ticker threads, then restore.
+/// raw mode, the inline renderer (scrollback-preserving, decision A), the
+/// reader/ticker threads, then restore.
 pub fn run_sync(app: &mut SyncApp) -> anyhow::Result<()> {
-    let (width, height) = terminal_size();
+    let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
     let viewport_height = height.min(40);
 
     crossterm::terminal::enable_raw_mode()?;
-    let mut terminal = ratatui::Terminal::with_options(
-        CrosstermBackend::new(std::io::stdout()),
-        ratatui::TerminalOptions {
-            // Decision A: inline, not the alt screen, so the final summary
-            // frame stays in terminal scrollback after exit, as in Go.
-            viewport: ratatui::Viewport::Inline(viewport_height),
-        },
-    )?;
-    terminal.hide_cursor()?;
 
     let result = (|| -> anyhow::Result<()> {
         let (tx, rx) = std::sync::mpsc::channel::<Event>();
@@ -56,17 +45,13 @@ pub fn run_sync(app: &mut SyncApp) -> anyhow::Result<()> {
         tx.send(Event::Msg(Msg::Resized(width, viewport_height)))
             .ok();
 
-        run(&mut terminal, app, rx)?;
+        let mut inline = Inline::new();
+        run(&mut inline, app, rx)?;
         Ok(())
     })();
 
-    terminal.show_cursor()?;
     crossterm::terminal::disable_raw_mode()?;
     result
-}
-
-fn terminal_size() -> (u16, u16) {
-    crossterm::terminal::size().unwrap_or((80, 24))
 }
 
 fn spawn_key_reader(tx: Sender<Event>) -> anyhow::Result<()> {
@@ -135,16 +120,13 @@ fn convert_key(key: crossterm::event::KeyEvent) -> Key {
     }
 }
 
-/// The backend-agnostic event loop: feed the machine, run the commands it
-/// asks for, redraw. Exits on `Cmd::Quit` or channel close.
-pub(crate) fn run<B: Backend>(
-    terminal: &mut Terminal<B>,
+/// The event loop: feed the machine, run the commands it asks for, redraw
+/// through the inline renderer. Exits on `Cmd::Quit` or channel close.
+pub(crate) fn run(
+    inline: &mut Inline,
     app: &mut SyncApp,
     events: Receiver<Event>,
-) -> anyhow::Result<()>
-where
-    B::Error: Send + Sync + 'static,
-{
+) -> anyhow::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel::<Event>();
     // Bridge the caller's events into the loop's own channel so worker
     // threads spawned below share one Sender.
@@ -161,7 +143,6 @@ where
 
     for cmd in app.init() {
         if execute_cmd(&tx, cmd)? {
-            feeder.join().ok();
             return Ok(());
         }
     }
@@ -179,23 +160,16 @@ where
                 break;
             }
         }
+        inline.draw(&app.render())?;
         if quit {
             break;
         }
-        draw(terminal, app)?;
     }
-    feeder.join().ok();
-    Ok(())
-}
-
-fn draw<B: Backend>(terminal: &mut Terminal<B>, app: &SyncApp) -> anyhow::Result<()>
-where
-    B::Error: Send + Sync + 'static,
-{
-    terminal.draw(|frame| {
-        let area = frame.area();
-        frame.render_widget(Paragraph::new(app.render()), area);
-    })?;
+    // The feeder is intentionally not joined: the key reader and ticker
+    // keep the events channel open forever, so joining would block after
+    // Quit. The thread parks on recv and dies with the process (or when
+    // the caller drops its sender, as the headless test does).
+    drop(feeder);
     Ok(())
 }
 
@@ -314,7 +288,6 @@ mod tests {
     use crate::remote::{RemoteRepo, Source};
     use crate::state::Plan;
     use crate::tui::sync::{NullPlanStore, Phase};
-    use ratatui::backend::TestBackend;
     use std::sync::Arc;
 
     /// Decision H's proof: the whole runtime runs headless. A dry-run
@@ -369,8 +342,8 @@ mod tests {
             tx.send(Event::Key(Key::Enter)).unwrap(); // execute (dry run)
         });
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        super::run(&mut terminal, &mut app, events).unwrap();
+        let mut inline = Inline::new();
+        super::run(&mut inline, &mut app, events).unwrap();
         feeder.join().unwrap();
 
         assert_eq!(app.phase, Phase::Summary);

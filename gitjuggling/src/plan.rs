@@ -32,7 +32,8 @@
 //!
 //! One deliberate deviation (§4.13 / §7 decision I): when the set of known
 //! remote URLs is **empty** and orphan candidates exist, [`build_plan`]
-//! refuses (returns an error via [`guard_empty_known_remotes`]) instead of
+//! refuses (via [`guard_empty_known_remotes`], invoked by the sync TUI's
+//! prune flow — plan building itself never prunes) instead of
 //! reproducing Go, where every local repo would be offered for deletion.
 //! With a configured remote set the behavior is exactly Go's; the exit-code
 //! wiring of the refusal is M5c.
@@ -232,19 +233,15 @@ fn rules_base_dir<'a>(repo: &RemoteRepo, ws: &'a Workspace) -> &'a str {
 ///
 /// Deviation (§4.13 / §7 decision I): refuses with an error when the set of
 /// known remote URLs is empty and orphan candidates exist — see
-/// [`guard_empty_known_remotes`]. Otherwise the behavior is exactly Go's.
+/// Otherwise the behavior is exactly Go's. Decision I's guard is
+/// invoked by the sync TUI's prune entry, not here: a plan built without
+/// --prune never prunes, so an empty known-remote set must not fail it.
 pub fn build_plan(
     remote_repos: &[RemoteRepo],
     local: &LocalRepos,
     ws: &Workspace,
     branch_exists: Option<&BranchExistsFn>,
 ) -> Result<Vec<Action>> {
-    // Decision I: with an empty known-remote set and orphan candidates, do
-    // not produce a plan whose prune phase would offer every local repo for
-    // deletion. Checked against the *full* remote list — the known set is
-    // what the sources returned, independent of the ignore filter.
-    guard_empty_known_remotes(local, remote_repos, ws)?;
-
     // Filter out ignored repos.
     let remote_repos: Vec<&RemoteRepo> = remote_repos
         .iter()
@@ -1076,9 +1073,10 @@ mod tests {
             "message must carry the orphan count: {msg}"
         );
 
-        // The same refusal comes out of build_plan.
-        let err = build_plan(&[], &local, &ws, None).expect_err("build_plan must refuse");
-        assert!(err.to_string().contains("refusing to prune"));
+        // Plan building itself never prunes: without the prune flag the
+        // guard must NOT fail the plan (an empty plan is Go's behavior).
+        let actions = build_plan(&[], &local, &ws, None).expect("plan builds without --prune");
+        assert!(actions.is_empty());
     }
 
     // Decision I: empty known-remote set but no orphan candidates (nothing
