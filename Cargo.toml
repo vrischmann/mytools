@@ -1,10 +1,11 @@
 [workspace]
 members = [
-    "git-stacked",
+    "ansible-password-agent",
     "cargo-target-clean",
     "git-journal",
+    "git-stacked",
+    "gitjuggling",
     "hf-cache",
     "humanize",
-    "ansible-password-agent",
 ]
 resolver = "2"

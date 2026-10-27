@@ -85,15 +85,44 @@ workspace:
 
 ## Build
 
-```
-go build -o gitjuggling .
-```
-
-Or use the justfile:
+The tool is a member of the Cargo workspace at the repository root (Rust
+port of the original Go tool; see `RUST_REWRITE_PLAN.md`):
 
 ```
-just build    # build binary
-just test     # run tests
-just check    # run go vet
-just install  # install to $GOPATH/bin
+cargo build -p gitjuggling
+cargo test -p gitjuggling
+cargo run -p gitjuggling -- sync --dry-run
 ```
+
+Install it with the workspace recipe: `just install-all`.
+
+The original Go implementation is still in the tree as the parity oracle
+(`go build ./gitjuggling` from the repository root — the Go module lives
+there); it is removed at cutover.
+
+## Deviations from the Go tool (Rust port)
+
+Deliberate, documented behavior differences (RUST_REWRITE_PLAN.md §8):
+
+1. **CLI stderr wording** — clap does not print usage on runtime errors the
+   way cobra does. Flag names, accepted forms, and exit codes are unchanged.
+2. **Parallel dirty check** — faster, same result set.
+3. **`init` output** — a commented YAML template instead of a marshalled
+   anonymous struct; the optional forgejo/token keys are visible as
+   comments.
+4. **`exec` discovery** — the nearest `.gitmodules` governs each repo
+   (Go used the last one seen in the walk), and linked worktrees (`.git`
+   files) are visited, unlike Go.
+5. **Plan-file format** — idiomatic JSON (snake_case, string enums); plans
+   written by the Go binary still load (legacy format, migrated in memory
+   on first save).
+6. **TUI rendering** — ratatui instead of Bubbletea: spacing and colors
+   drift slightly; keymaps, phase flow, and the inline
+   (scrollback-preserving) rendering mode are kept.
+7. **Prune with no known remotes** — guarded: with no remote source
+   configured, `--prune` refuses and reports the would-be orphan count
+   (exit 1; exit 0 as informational under `--dry-run`) instead of offering
+   every local repo for deletion.
+8. **Exit codes otherwise match Go exactly**, including the quirks: prune
+   failures exit 0, a declined tracking fix exits 1, and a load error after
+   the TUI started exits 0.
