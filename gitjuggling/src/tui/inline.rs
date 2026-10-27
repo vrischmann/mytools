@@ -52,7 +52,9 @@ impl Inline {
 
         let mut out = io::stdout();
         if self.prev_height > 0 {
-            // Move to the top of the previous frame and clear it.
+            // Move to the top of the previous frame and clear it. The
+            // cursor is already at column 0: every frame ends with \r\n,
+            // and cursor-up preserves the column.
             write!(out, "\x1b[{}A\x1b[J", self.prev_height)?;
         }
         let mut frame_height = 0usize;
@@ -60,7 +62,15 @@ impl Inline {
             let row: Vec<&Cell> = (0..width)
                 .map(|x| buffer.cell((x, y as u16)).expect("cell in buffer"))
                 .collect();
-            writeln!(out, "{}", styled_row(&row))?;
+            let styled = styled_row(&row);
+            // Trailing padding would push the row against the right margin,
+            // where a full-width line wraps before the line break and costs
+            // a blank line per frame. Trim it; it carries no information.
+            let styled = styled.trim_end().to_owned();
+            // Raw mode disables the \n -> \r\n translation (ONLCR), so
+            // the break must be explicit: \n alone leaves the cursor in
+            // the same column and the frame "streams" instead of redrawing.
+            write!(out, "{styled}\r\n")?;
             frame_height += 1;
         }
         out.flush()?;
