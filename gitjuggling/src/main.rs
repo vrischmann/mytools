@@ -36,7 +36,10 @@
 
 use std::process;
 
+use anyhow::Context;
+
 use clap::{ArgAction, CommandFactory, Parser, Subcommand};
+use gitjuggling::{config, discover, git, plan, state, tui};
 
 /// Repository sync and git command runner
 #[derive(Parser)]
@@ -153,12 +156,180 @@ fn main() {
         }
     };
 
-    let name = match command {
-        Command::Sync { .. } => "sync",
-        Command::Exec { .. } => "exec",
-        Command::Init { .. } => "init",
+    match command {
+        Command::Sync {
+            workspace,
+            config,
+            dry_run,
+            interactive,
+            prune,
+            skip_pull,
+            concurrency,
+        } => match run_sync_command(
+            workspace,
+            &config,
+            dry_run,
+            interactive,
+            prune,
+            skip_pull,
+            concurrency as usize,
+        ) {
+            Ok(code) => process::exit(code),
+            // Pre-TUI failures exit 1 (Go: RunE error -> cobra prints,
+            // main.go exits 1); wording drift is accepted (§8 item 1).
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                process::exit(1);
+            }
+        },
+        Command::Exec {
+            depth,
+            concurrency,
+            verbose,
+            args,
+        } => match run_exec_command(depth as usize, concurrency as usize, verbose, args) {
+            Ok(code) => process::exit(code),
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                process::exit(1);
+            }
+        },
+        Command::Init { config } => match run_init_command(&config) {
+            Ok(()) => process::exit(0),
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                process::exit(1);
+            }
+        },
+    }
+}
+
+/// Go: `cmd/sync.go runSync` — load config, resolve the workspace, load the
+/// durable plan, run the TUI, then map to the §4.11 exit matrix: any
+/// `failed` entry exits 1 (a declined tracking fix counts); a load error
+/// raised *after* the TUI started exits 0 (it only reached the summary
+/// view); prune failures never touch `failed`, so they exit 0.
+fn run_sync_command(
+    workspace: Option<String>,
+    config_path: &str,
+    dry_run: bool,
+    interactive: bool,
+    do_prune: bool,
+    skip_pull: bool,
+    concurrency: usize,
+) -> anyhow::Result<i32> {
+    let cfg = if config_path.is_empty() {
+        config::load_default()
+    } else {
+        config::load_from(std::path::Path::new(config_path))
+    }
+    .context("loading config")?;
+
+    let workspace = workspace.unwrap_or_else(|| cfg.default_workspace.clone());
+    let ws = cfg
+        .get_workspace(&workspace)
+        .with_context(|| format!("resolving workspace {workspace:?}"))?
+        .clone();
+
+    let saved_plan = state::load(&workspace).context("loading saved sync plan")?;
+
+    let mut app = tui::SyncApp::new(
+        workspace,
+        ws,
+        dry_run,
+        interactive,
+        do_prune,
+        skip_pull,
+        concurrency,
+        saved_plan,
+    );
+    let branch_exists: Box<plan::BranchExistsFn> = Box::new(git::remote_branch_exists);
+    app.with_seams(std::sync::Arc::new(tui::FilePlanStore), Some(branch_exists));
+
+    tui::run_sync(&mut app).context("running TUI")?;
+    Ok(if app.has_failures() { 1 } else { 0 })
+}
+
+/// Go: `cmd/exec.go runExec` — discover repos, run the command per repo
+/// under the progress TUI, exit 1 when any command failed.
+fn run_exec_command(
+    depth: usize,
+    concurrency: usize,
+    verbose: bool,
+    git_args: Vec<String>,
+) -> anyhow::Result<i32> {
+    let paths = discover::exec_repository_paths(depth);
+    if paths.is_empty() {
+        println!("No repositories found.");
+        return Ok(0);
+    }
+
+    let mut app = tui::ExecApp::new(git_args, verbose);
+    let has_failures = tui::run_exec(&mut app, depth, concurrency).context("running TUI")?;
+    Ok(if has_failures { 1 } else { 0 })
+}
+
+/// Go: `cmd/init.go runInit` with decision D: a commented YAML template
+/// (replacing the anonymous-struct marshal), keeping the exists-check, the
+/// 0755 directory / 0644 file modes, and the success message.
+fn run_init_command(config_path: &str) -> anyhow::Result<()> {
+    let path = if config_path.is_empty() {
+        let dir = dirs::config_dir().context("failed to determine config directory")?;
+        dir.join("gitjuggling").join("config.yaml")
+    } else {
+        std::path::PathBuf::from(config_path)
     };
 
-    eprintln!("error: {name} is not yet ported (see RUST_REWRITE_PLAN.md)");
-    process::exit(1);
+    if path.exists() {
+        anyhow::bail!("config file already exists at {}", path.display());
+    }
+
+    let dir = path
+        .parent()
+        .context("config path has no parent directory")?;
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create config directory {}", dir.display()))?;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let template = INIT_TEMPLATE.replace("{home}", &home);
+    std::fs::write(&path, template)
+        .with_context(|| format!("failed to write config file {}", path.display()))?;
+
+    println!("Config file created at {}", path.display());
+    Ok(())
 }
+
+/// The decision-D init template: same fields as Go's anonymous struct, with
+/// the optional keys visible as comments.
+const INIT_TEMPLATE: &str = r#"# gitjuggling configuration.
+#
+# default_workspace selects the workspace used by a bare `gitjuggling sync`.
+default_workspace: personal
+
+# One entry per workspace; the key is the workspace name.
+workspace:
+  personal:
+    # Local directory scanned for repositories.
+    root: {home}/dev
+    # GitHub owners whose repositories are synced (case-insensitive).
+    github_owners:
+      - YOUR_GITHUB_USERNAME
+    # Optional: GitHub token, or an op:// reference resolved via `op read`.
+    # github_token: op://vault/item/github
+    # Optional: Forgejo instance to sync from.
+    # forgejo_url: https://git.example.com
+    # forgejo_user: youruser
+    # forgejo_token: op://vault/item/forgejo
+    # Where each category of repository is placed.
+    rules:
+      base: {home}/dev/repos
+      forks: {home}/dev/forks
+      archived: {home}/dev/archived
+      # Optional: name-pattern routing; `to` must reference a capture.
+      # patterns:
+      #   - pattern: '^workspace-(.+)$'
+      #     to: {home}/dev/workspaces/$1
+    # Optional: ignore globs matched against repo names.
+    # ignore:
+    #   - '.*-scratch'
+"#;

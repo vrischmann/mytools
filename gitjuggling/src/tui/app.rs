@@ -237,6 +237,37 @@ fn execute_cmd(tx: &Sender<Event>, cmd: super::sync::Cmd) -> anyhow::Result<bool
                 Msg::LocalRepos(result)
             });
         }
+        Cmd::TrackingFix { item } => {
+            spawn_worker(tx.clone(), move || {
+                let mut result = match item.kind {
+                    crate::tui::sync::TrackingFixKind::PushUpstream => exec::push_and_set_upstream(
+                        Path::new(&item.path),
+                        &item.remote_name,
+                        &item.branch,
+                    ),
+                    crate::tui::sync::TrackingFixKind::StaleUpstream => {
+                        exec::resolve_stale_upstream(
+                            Path::new(&item.path),
+                            &item.remote_name,
+                            &item.branch,
+                        )
+                    }
+                    crate::tui::sync::TrackingFixKind::SetUpstream => exec::set_upstream_and_pull(
+                        Path::new(&item.path),
+                        &item.remote_name,
+                        &item.branch,
+                    ),
+                };
+                result.description = item.description.clone();
+                Msg::TrackingFixResult(Box::new(result))
+            });
+        }
+        Cmd::Prune { orphans, dry_run } => {
+            spawn_worker(tx.clone(), move || {
+                let results = crate::prune::prune_orphans(&orphans, dry_run, None);
+                Msg::PruneResults(results)
+            });
+        }
         Cmd::StartExecution {
             actions,
             dry_run,

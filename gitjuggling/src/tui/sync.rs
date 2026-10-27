@@ -17,8 +17,10 @@ use std::sync::Arc;
 
 use crate::config::Workspace;
 use crate::discover::LocalRepos;
-use crate::exec::{ActionResult, CancelToken};
+use crate::exec::{self, ActionResult, CancelToken};
+use crate::git;
 use crate::plan::{self, Action, ActionType, BranchExistsFn};
+use crate::prune::{self, OrphanRepo, PruneResult};
 use crate::remote::{self, RemoteRepo};
 use crate::state::Plan;
 use crate::tui::PlanView;
@@ -59,6 +61,29 @@ pub enum Key {
     End,
 }
 
+/// One tracking-fix prompt (Go: `trackingFixItem`).
+#[derive(Debug, Clone)]
+pub struct TrackingFixItem {
+    pub description: String,
+    pub path: String,
+    pub remote_name: String,
+    pub branch: String,
+    pub kind: TrackingFixKind,
+}
+
+/// Go: `trackingFixAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // Go's names: SetUpstream/PushUpstream/StaleUpstream
+pub enum TrackingFixKind {
+    /// `git branch --set-upstream-to` + `git pull --rebase`.
+    SetUpstream,
+    /// `git push -u` (creates the remote branch, sets upstream).
+    PushUpstream,
+    /// Switch to the default branch, pull, delete the stale branch if
+    /// merged.
+    StaleUpstream,
+}
+
 /// Messages the runtime feeds the machine (Go: the unexported `sync*Msg`
 /// types plus `tea.WindowSizeMsg`, `spinner.TickMsg`).
 pub enum Msg {
@@ -68,6 +93,12 @@ pub enum Msg {
     ActionResult(ActionResult),
     SpinnerTick(SpinnerTick),
     Resized(u16, u16),
+    /// A tracking fix the runtime ran on the machine's behalf (Go:
+    /// `trackingFixResultMsg`).
+    TrackingFixResult(Box<ActionResult>),
+    /// Prune results from the runtime (Go runs `prune.PruneOrphans`
+    /// inline in the key handler; the port routes it through a command).
+    PruneResults(Vec<PruneResult>),
 }
 
 impl std::fmt::Debug for Msg {
@@ -84,6 +115,8 @@ impl std::fmt::Debug for Msg {
             Msg::ActionResult(_) => "ActionResult",
             Msg::SpinnerTick(_) => "SpinnerTick",
             Msg::Resized(..) => "Resized",
+            Msg::TrackingFixResult(_) => "TrackingFixResult",
+            Msg::PruneResults(_) => "PruneResults",
         };
         f.write_str(name)
     }
@@ -106,6 +139,14 @@ pub enum Cmd {
     ScanLocal { root: String },
     /// Keep the spinner ticking (Go: `spinner.Tick`).
     Tick,
+    /// Run one tracking fix and report back as
+    /// [`Msg::TrackingFixResult`] (Go runs the fix inline in `handleKey`).
+    TrackingFix { item: TrackingFixItem },
+    /// Prune the given orphans and report back as [`Msg::PruneResults`].
+    Prune {
+        orphans: Vec<OrphanRepo>,
+        dry_run: bool,
+    },
     /// Spawn the bounded executor and stream results back as
     /// [`Msg::ActionResult`] (Go: `ExecuteActions` + `waitForActionResult`).
     StartExecution {
@@ -227,6 +268,16 @@ pub struct SyncApp {
     exec_results: Vec<ActionResult>,
     pub(crate) exec_log: Vec<String>,
 
+    // Tracking fix phase (M5c)
+    pub(crate) tracking_fix_items: Vec<TrackingFixItem>,
+    pub(crate) tracking_fix_cursor: usize,
+    pub(crate) tracking_fix_results: Vec<ActionResult>,
+
+    // Prune phases (M5c)
+    pub(crate) orphans: Vec<OrphanRepo>,
+    pub(crate) prune_results: Vec<PruneResult>,
+    pub(crate) prune_cursor: usize,
+
     // Summary phase
     pub(crate) succeeded: Vec<ActionResult>,
     pub(crate) failed: Vec<ActionResult>,
@@ -311,6 +362,12 @@ impl SyncApp {
             total: 0,
             exec_results: Vec::new(),
             exec_log: Vec::new(),
+            tracking_fix_items: Vec::new(),
+            tracking_fix_cursor: 0,
+            tracking_fix_results: Vec::new(),
+            orphans: Vec::new(),
+            prune_results: Vec::new(),
+            prune_cursor: 0,
             succeeded: Vec::new(),
             failed: Vec::new(),
             load_err: None,
@@ -457,6 +514,24 @@ impl SyncApp {
                 }
                 Vec::new()
             }
+            Msg::TrackingFixResult(result) => {
+                let result = *result;
+                self.tracking_fix_results.push(result.clone());
+                if result.success {
+                    self.succeeded.push(result);
+                } else {
+                    self.failed.push(result);
+                }
+                self.tracking_fix_cursor += 1;
+                if self.tracking_fix_cursor >= self.tracking_fix_items.len() {
+                    return self.after_tracking_fix();
+                }
+                Vec::new()
+            }
+            Msg::PruneResults(results) => {
+                self.prune_results.extend(results);
+                Vec::new()
+            }
         }
     }
 
@@ -489,12 +564,127 @@ impl SyncApp {
                     Vec::new()
                 }
             }
-            // Prune and tracking-fix phases are wired in M5c; until then
-            // they are unreachable.
-            Phase::PruneList | Phase::PruneConfirm | Phase::PruneDone | Phase::TrackingFix => {
-                Vec::new()
+            Phase::TrackingFix => self.handle_tracking_fix_key(key),
+            Phase::PruneList => self.handle_prune_list_key(key),
+            Phase::PruneConfirm => self.handle_prune_confirm_key(key),
+            Phase::PruneDone => {
+                if matches!(key, Key::Char('q') | Key::Enter | Key::CtrlChar('c')) {
+                    self.phase = Phase::Summary;
+                    vec![Cmd::Quit]
+                } else {
+                    Vec::new()
+                }
             }
             Phase::Loading => Vec::new(),
+        }
+    }
+
+    /// Go: the `syncPhaseTrackingFix` key handler. A confirmed fix runs on
+    /// the runtime via [`Cmd::TrackingFix`]; the cursor advances when the
+    /// result arrives (Go runs the fix inline but also has a result-message
+    /// path — the observable sequence is identical).
+    fn handle_tracking_fix_key(&mut self, key: Key) -> Vec<Cmd> {
+        match key {
+            Key::Char('y' | 'Y') | Key::Enter => {
+                let item = self.tracking_fix_items[self.tracking_fix_cursor].clone();
+                vec![Cmd::TrackingFix { item }]
+            }
+            Key::Char('n' | 'N') => {
+                let item = &self.tracking_fix_items[self.tracking_fix_cursor];
+                self.failed.push(ActionResult {
+                    description: item.description.clone(),
+                    path: item.path.clone(),
+                    success: false,
+                    message: "no tracking branch (user declined fix)".to_owned(),
+                });
+                self.tracking_fix_cursor += 1;
+                if self.tracking_fix_cursor >= self.tracking_fix_items.len() {
+                    self.after_tracking_fix()
+                } else {
+                    Vec::new()
+                }
+            }
+            Key::Char('q') | Key::CtrlChar('c') => {
+                while self.tracking_fix_cursor < self.tracking_fix_items.len() {
+                    let item = &self.tracking_fix_items[self.tracking_fix_cursor];
+                    self.failed.push(ActionResult {
+                        description: item.description.clone(),
+                        path: item.path.clone(),
+                        success: false,
+                        message: "no tracking branch (skipped)".to_owned(),
+                    });
+                    self.tracking_fix_cursor += 1;
+                }
+                self.after_tracking_fix()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Go: the `syncPhasePruneList` key handler.
+    fn handle_prune_list_key(&mut self, key: Key) -> Vec<Cmd> {
+        match key {
+            // Remove all: Go bounces through PruneConfirm straight to
+            // PruneDone and lets the results land on the summary.
+            Key::Char('y') => {
+                let orphans = self.orphans.clone();
+                self.phase = Phase::PruneDone;
+                vec![Cmd::Prune {
+                    orphans,
+                    dry_run: self.dry_run,
+                }]
+            }
+            Key::Char('n') | Key::Char('q') | Key::CtrlChar('c') => {
+                self.phase = Phase::Summary;
+                vec![Cmd::Quit]
+            }
+            Key::Char('i') => {
+                self.phase = Phase::PruneConfirm;
+                self.prune_cursor = 0;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Go: the `syncPhasePruneConfirm` key handler.
+    fn handle_prune_confirm_key(&mut self, key: Key) -> Vec<Cmd> {
+        match key {
+            Key::Char('y') | Key::Enter => {
+                let mut cmds = Vec::new();
+                if self.prune_cursor < self.orphans.len() {
+                    let orphan = self.orphans[self.prune_cursor].clone();
+                    cmds.push(Cmd::Prune {
+                        orphans: vec![orphan],
+                        dry_run: self.dry_run,
+                    });
+                    self.prune_cursor += 1;
+                }
+                if self.prune_cursor >= self.orphans.len() {
+                    self.phase = Phase::PruneDone;
+                }
+                cmds
+            }
+            Key::Char('n') => {
+                self.prune_cursor += 1;
+                if self.prune_cursor >= self.orphans.len() {
+                    self.phase = Phase::PruneDone;
+                }
+                Vec::new()
+            }
+            Key::Char('a') => {
+                let remaining = self.orphans[self.prune_cursor.min(self.orphans.len())..].to_vec();
+                self.phase = Phase::PruneDone;
+                vec![Cmd::Prune {
+                    orphans: remaining,
+                    dry_run: self.dry_run,
+                }]
+            }
+            Key::Char('q') | Key::CtrlChar('c') => {
+                self.phase = Phase::Summary;
+                vec![Cmd::Quit]
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -695,8 +885,9 @@ impl SyncApp {
         }]
     }
 
-    /// Go: `finishExecution`, minus the tracking-fix and prune routing that
-    /// M5c adds: split results, then summary + quit.
+    /// Go: `finishExecution` — split results, detect tracking-fixable
+    /// failures (removing them from the failed list), then route to the
+    /// tracking-fix phase, the prune phases, or summary + quit.
     fn finish_execution(&mut self) -> Vec<Cmd> {
         for r in &self.exec_results {
             if r.success {
@@ -704,6 +895,72 @@ impl SyncApp {
             } else {
                 self.failed.push(r.clone());
             }
+        }
+
+        for r in &self.failed {
+            let is_stale = exec::is_stale_upstream_error(&r.message);
+            let is_missing = exec::is_no_tracking_error(&r.message);
+            if !is_stale && !is_missing {
+                continue;
+            }
+            let Ok(branch) = git::current_branch(std::path::Path::new(&r.path)) else {
+                continue;
+            };
+            let kind = if is_stale {
+                TrackingFixKind::StaleUpstream
+            } else {
+                match git::remote_branch_exists(std::path::Path::new(&r.path), "origin", &branch) {
+                    Ok(true) => TrackingFixKind::SetUpstream,
+                    _ => TrackingFixKind::PushUpstream,
+                }
+            };
+            self.tracking_fix_items.push(TrackingFixItem {
+                description: r.description.clone(),
+                path: r.path.clone(),
+                remote_name: "origin".to_owned(),
+                branch,
+                kind,
+            });
+        }
+
+        if !self.tracking_fix_items.is_empty() {
+            // Fixable items leave the failed list so they do not show in
+            // the summary before resolution.
+            let fixable: std::collections::HashSet<&str> = self
+                .tracking_fix_items
+                .iter()
+                .map(|i| i.path.as_str())
+                .collect();
+            self.failed.retain(|r| !fixable.contains(r.path.as_str()));
+            self.phase = Phase::TrackingFix;
+            self.tracking_fix_cursor = 0;
+            self.tracking_fix_results.clear();
+            return Vec::new();
+        }
+
+        self.after_tracking_fix()
+    }
+
+    /// Go: `afterTrackingFix` — the shared tail: prune when asked, then
+    /// summary + quit.
+    fn after_tracking_fix(&mut self) -> Vec<Cmd> {
+        let orphans = if self.do_prune
+            && let Some(local) = self.local_repos.as_ref()
+        {
+            let all: Vec<RemoteRepo> = self
+                .github_repos
+                .iter()
+                .chain(self.forgejo_repos.iter())
+                .cloned()
+                .collect();
+            prune::find_orphans(local, &all, &self.ws)
+        } else {
+            Vec::new()
+        };
+        if !orphans.is_empty() {
+            self.orphans = orphans;
+            self.phase = Phase::PruneList;
+            return Vec::new();
         }
         self.phase = Phase::Summary;
         vec![Cmd::Quit]
@@ -939,9 +1196,15 @@ fn repo_desc(action: &Action) -> String {
     )
 }
 
-/// Go: `formatActionResult` (sync.go:1392) — the executing-phase log line.
+/// Go: `formatActionResult` (sync.go:1392) — the executing-phase log line:
+/// check/cross, description padded to 30, then path (success) or message
+/// (failure).
 pub fn format_action_result(r: &ActionResult) -> String {
-    format!("{} {}", r.description, r.message)
+    if r.success {
+        format!("  ✓ {:<30} {}", r.description, r.path)
+    } else {
+        format!("  ✗ {:<30} {}", r.description, r.message)
+    }
 }
 
 #[cfg(test)]
@@ -1332,5 +1595,88 @@ mod tests {
         let cmds = app.handle_key(Key::Char('q'));
         assert!(matches!(cmds.as_slice(), [Cmd::Quit]));
         assert!(app.cancel_token().is_cancelled());
+    }
+
+    // ------------------------------------------------------------------
+    // §4.11 exit-code matrix, pinned against the same computation main
+    // uses: has_failures() over the failed list only.
+    // ------------------------------------------------------------------
+
+    fn matrix_exit(app: &SyncApp) -> i32 {
+        if app.has_failures() { 1 } else { 0 }
+    }
+
+    fn matrix_result(success: bool, message: &str) -> ActionResult {
+        ActionResult {
+            description: "vincent/demo (github)".to_owned(),
+            path: "/tmp/demo".to_owned(),
+            success,
+            message: message.to_owned(),
+        }
+    }
+
+    /// Success / dry-run / user quit: nothing in failed -> exit 0.
+    #[test]
+    fn matrix_success_dry_run_and_quit_exit_zero() {
+        let mut app = test_app();
+        app.succeeded.push(matrix_result(true, "updated"));
+        assert_eq!(matrix_exit(&app), 0);
+
+        let app = test_app();
+        assert_eq!(matrix_exit(&app), 0);
+    }
+
+    /// Any entry in failed exits 1 — including a tracking fix the user
+    /// declined (§4.11: a declined fix is a failure).
+    #[test]
+    fn matrix_failed_entry_exits_one_including_declined_fix() {
+        let mut app = test_app();
+        app.failed.push(matrix_result(
+            false,
+            "no tracking branch (user declined fix)",
+        ));
+        assert_eq!(matrix_exit(&app), 1);
+    }
+
+    /// A load error raised after the TUI started reaches only the summary
+    /// view — never the failed list — so the process exits 0.
+    #[test]
+    fn matrix_post_tui_load_error_exits_zero() {
+        let mut app = test_app();
+        app.load_err = Some(anyhow::anyhow!("fetching remote repos: boom"));
+        assert_eq!(matrix_exit(&app), 0);
+    }
+
+    /// Prune failures live in prune_results, never in failed (Go's
+    /// HasFailures inspects only m.failed), so they exit 0.
+    #[test]
+    fn matrix_prune_failures_exit_zero() {
+        let mut app = test_app();
+        app.prune_results.push(crate::prune::PruneResult {
+            name: "stale-repo".to_owned(),
+            path: Path::new("/tmp/stale-repo").to_owned(),
+            success: false,
+            message: "failed to remove: permission denied".to_owned(),
+        });
+        assert_eq!(matrix_exit(&app), 0);
+    }
+
+    /// An empty saved plan is a resume prompt, not a failure.
+    #[test]
+    fn matrix_empty_saved_plan_is_not_a_failure() {
+        let mut app = SyncApp::new(
+            "personal".to_owned(),
+            crate::config::Workspace::default(),
+            false,
+            true,
+            false,
+            false,
+            1,
+            Some(Plan {
+                actions: Vec::new(),
+            }),
+        );
+        app.with_seams(null_store(), None);
+        assert_eq!(matrix_exit(&app), 0);
     }
 }

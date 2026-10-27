@@ -8,11 +8,14 @@
 //!   bubbles widgets (spinner, plan viewport) are written, not picked.
 
 mod app;
+mod exec;
 pub mod styles;
 mod sync;
 mod view;
 mod widgets;
 
 pub use app::run_sync;
-pub(crate) use sync::SyncApp;
+pub use exec::run_exec;
+pub use exec::{ExecApp, ExecMsg, ExecResult};
+pub use sync::{FilePlanStore, SyncApp};
 pub(crate) use widgets::PlanView;

@@ -1,8 +1,7 @@
 //! Orphan detection (port of `internal/prune/prune.go`).
 //!
-//! M2 carries [`find_orphans`] only; `PruneOrphans` — the actual recursive
-//! removal with its confirm callback — lands with the prune flow in M3
-//! (RUST_REWRITE_PLAN.md §5).
+//! `prune_orphans` (the actual recursive removal with its confirm callback)
+//! lands with the prune flow in M5c (RUST_REWRITE_PLAN.md §5).
 //!
 //! §4.13 parity note: [`find_orphans`] reproduces Go behavior **exactly**,
 //! including the quirk that with zero known remote URLs every non-ignored,
@@ -195,4 +194,67 @@ mod tests {
         );
         assert_eq!(orphans[0].name, "orphan-repo");
     }
+}
+
+/// The outcome of pruning one orphan (Go: `prune.PruneResult`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PruneResult {
+    pub name: String,
+    pub path: PathBuf,
+    pub success: bool,
+    pub message: String,
+}
+
+/// Removes orphan repos recursively (Go: `prune.PruneOrphans`,
+/// prune.go:76). With `dry_run`, each orphan reports "would remove" without
+/// touching disk. A `confirm` callback declining an orphan records a
+/// successful "skipped (user declined)" — declined is not failed (§4.10).
+pub fn prune_orphans(
+    orphans: &[OrphanRepo],
+    dry_run: bool,
+    mut confirm: Option<&mut dyn FnMut(&str) -> bool>,
+) -> Vec<PruneResult> {
+    let mut results = Vec::new();
+    for orphan in orphans {
+        if dry_run {
+            results.push(PruneResult {
+                name: orphan.name.clone(),
+                path: orphan.path.clone(),
+                success: true,
+                message: "would remove".to_owned(),
+            });
+            continue;
+        }
+        if let Some(confirm) = confirm.as_mut() {
+            let prompt = format!(
+                "Remove orphan repo {} ({})?",
+                orphan.name,
+                orphan.path.display()
+            );
+            if !confirm(&prompt) {
+                results.push(PruneResult {
+                    name: orphan.name.clone(),
+                    path: orphan.path.clone(),
+                    success: true,
+                    message: "skipped (user declined)".to_owned(),
+                });
+                continue;
+            }
+        }
+        match std::fs::remove_dir_all(&orphan.path) {
+            Ok(()) => results.push(PruneResult {
+                name: orphan.name.clone(),
+                path: orphan.path.clone(),
+                success: true,
+                message: "removed".to_owned(),
+            }),
+            Err(err) => results.push(PruneResult {
+                name: orphan.name.clone(),
+                path: orphan.path.clone(),
+                success: false,
+                message: format!("failed to remove: {err}"),
+            }),
+        }
+    }
+    results
 }

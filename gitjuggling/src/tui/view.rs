@@ -22,11 +22,10 @@ impl SyncApp {
             Phase::WorktreeConfirm => self.render_worktree_confirm(),
             Phase::Executing => self.render_executing(),
             Phase::Summary => self.render_summary(),
-            // M5c views; unreachable from M5a's flow but rendered
-            // defensively as the log tail rather than panicking.
-            Phase::TrackingFix | Phase::PruneList | Phase::PruneConfirm | Phase::PruneDone => {
-                self.render_exec_log_fallback()
-            }
+            Phase::TrackingFix => self.render_tracking_fix(),
+            Phase::PruneList => self.render_prune_list(),
+            Phase::PruneConfirm => self.render_prune_confirm(),
+            Phase::PruneDone => self.render_prune_done(),
         }
     }
 
@@ -265,6 +264,30 @@ impl SyncApp {
             }
         }
 
+        // Go: the prune results block inside renderSummary.
+        if !self.prune_results.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(""));
+            lines.push(styles::section_header("Prune Summary"));
+            lines.push(Line::from(""));
+            for r in &self.prune_results {
+                if r.success {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        styles::checkmark(),
+                        Span::raw(format!(" {} ({})", r.name, r.message)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        styles::cross_mark(),
+                        Span::raw(format!(" {} — ", r.name)),
+                        Span::styled(r.message.clone(), error()),
+                    ]));
+                }
+            }
+        }
+
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  "),
@@ -434,16 +457,161 @@ impl SyncApp {
         lines
     }
 
-    /// A defensive view for phases whose renderers arrive in M5c: the
-    /// execution log tail plus the standing key hint, so a key path that
-    /// reaches an unwired phase stays usable (q always quits).
-    fn render_exec_log_fallback(&self) -> Vec<Line<'static>> {
-        let mut lines = vec![styles::section_header("Executing")];
-        for entry in self.exec_log.iter().rev().take(10) {
-            lines.push(Line::from(entry.clone()));
+    /// Go: `renderTrackingFix` — the per-item fix prompt with the previous
+    /// results above it.
+    fn render_tracking_fix(&self) -> Vec<Line<'static>> {
+        if self.tracking_fix_cursor >= self.tracking_fix_items.len() {
+            return Vec::new();
+        }
+        let item = &self.tracking_fix_items[self.tracking_fix_cursor];
+        let current = self.tracking_fix_cursor + 1;
+        let total = self.tracking_fix_items.len();
+
+        let mut lines = vec![
+            styles::section_header(&format!("Fix tracking branch {current}/{total}")),
+            Line::from(""),
+        ];
+        for r in &self.tracking_fix_results {
+            lines.push(Line::from(crate::tui::sync::format_action_result(r)));
+        }
+
+        let (problem, question, command) = match item.kind {
+            super::sync::TrackingFixKind::PushUpstream => (
+                format!("{} has no upstream tracking branch.", item.description),
+                format!(
+                    "Push {} to {} and set upstream?",
+                    item.branch, item.remote_name
+                ),
+                format!("git push -u {} {}", item.remote_name, item.branch),
+            ),
+            super::sync::TrackingFixKind::StaleUpstream => (
+                format!(
+                    "{} tracks a remote ref that no longer exists.",
+                    item.description
+                ),
+                format!(
+                    "Switch off {}, pull default branch, and delete {} if merged?",
+                    item.branch, item.branch
+                ),
+                format!(
+                    "git checkout <default> && git pull --rebase && git branch -d {}",
+                    item.branch
+                ),
+            ),
+            super::sync::TrackingFixKind::SetUpstream => (
+                format!("{} has no upstream tracking branch.", item.description),
+                format!(
+                    "Set upstream to {}/{} and pull?",
+                    item.remote_name, item.branch
+                ),
+                format!(
+                    "git branch --set-upstream-to={}/{} {}",
+                    item.remote_name, item.branch, item.branch
+                ),
+            ),
+        };
+        let style_problem = |t: String| Line::from(Span::styled(t, error()));
+        let style_ok = |t: String| Line::from(Span::styled(t, success()));
+        lines.push(Line::from(""));
+        lines.push(style_problem(problem));
+        lines.push(Line::from(""));
+        lines.push(style_ok(question));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(command, dim())));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[y] Fix  [n] Skip  [q] Skip all remaining".to_owned(),
+            dim(),
+        )));
+        lines
+    }
+
+    /// Go: `renderPruneList`.
+    fn render_prune_list(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from("")];
+        lines.push(Line::from(format!(
+            "  Found {} orphan repos",
+            self.orphans.len()
+        )));
+        lines.push(Line::from(""));
+        for o in &self.orphans {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                styles::bullet(),
+                Span::raw(format!(" {} ", o.name)),
+                Span::styled(o.path.to_string_lossy().into_owned(), dim()),
+            ]));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  [q] Quit".to_owned(), dim())));
+        lines.push(Line::from(Span::styled(
+            "  [y] Remove all  [n] Skip  [i] Interactive".to_owned(),
+            dim(),
+        )));
+        lines
+    }
+
+    /// Go: `renderPruneConfirm`.
+    fn render_prune_confirm(&self) -> Vec<Line<'static>> {
+        if self.prune_cursor >= self.orphans.len() {
+            return self.render_prune_done();
+        }
+        let o = &self.orphans[self.prune_cursor];
+        vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Remove orphan "),
+                Span::styled(o.name.clone(), warn()),
+                Span::raw(" ("),
+                Span::styled(o.path.to_string_lossy().into_owned(), dim()),
+                Span::raw(")?"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  [y] Yes  [n] No  [a] Yes to all  [q] Quit".to_owned(),
+                dim(),
+            )),
+        ]
+    }
+
+    /// Go: `renderPruneDone`.
+    fn render_prune_done(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![styles::section_header("Prune Summary")];
+        let mut removed = 0;
+        let mut failed = 0;
+        for r in &self.prune_results {
+            if r.success {
+                removed += 1;
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    styles::checkmark(),
+                    Span::raw(format!(" {} ({})\n", r.name, r.message)),
+                ]));
+            } else {
+                failed += 1;
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    styles::cross_mark(),
+                    Span::raw(format!(" {} — ", r.name)),
+                    Span::styled(r.message.clone(), error()),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Removed:".to_owned(), label()),
+            Span::raw(" "),
+            Span::styled(removed.to_string(), success()),
+            Span::raw(" | "),
+            Span::styled("Failed:".to_owned(), label()),
+            Span::raw(" "),
+            Span::styled(failed.to_string(), error()),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  [Enter] Continue".to_owned(),
+            dim(),
+        )));
         lines
     }
 }

@@ -281,6 +281,70 @@ fn cmp_walk_order(a: &Path, b: &Path) -> Ordering {
     }
 }
 
+pub fn exec_repository_paths(depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    walk_for_exec(Path::new("."), 0, depth, None, &mut out);
+    out
+}
+
+fn walk_for_exec(
+    dir: &Path,
+    level: usize,
+    max_depth: usize,
+    gitmodules: Option<&crate::gitmodules::GitModules>,
+    out: &mut Vec<PathBuf>,
+) {
+    // Nearest-file rule: a .gitmodules here shadows any inherited one.
+    let local_gitmodules = std::fs::read_to_string(dir.join(".gitmodules"))
+        .ok()
+        .and_then(|data| crate::gitmodules::parse(&data).ok());
+    let gm = local_gitmodules.as_ref().or(gitmodules);
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map(|rd| rd.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let path = dir.join(name);
+
+        if name == ".git" {
+            // A .git directory (main clones) or a .git file (linked
+            // worktrees) both mark a repository — decision E.
+            let repo_path = dir;
+            let is_submodule = gm
+                .map(|gm| {
+                    let base = repo_path
+                        .file_name()
+                        .map(|b| b.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    gm.contains(&base)
+                })
+                .unwrap_or(false);
+            if !is_submodule {
+                out.push(normalize_walk_path(repo_path));
+            }
+            // Go never returns SkipDir for submodules: the walk keeps
+            // descending either way.
+        }
+
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            && level < max_depth
+            && name != ".git"
+        {
+            walk_for_exec(&path, level + 1, max_depth, gm, out);
+        }
+    }
+}
+
+/// `Path::new("./a/b")` renders as "a/b" (Go's WalkDir drops the "./").
+fn normalize_walk_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    PathBuf::from(s.strip_prefix("./").unwrap_or(&s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

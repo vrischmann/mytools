@@ -40,7 +40,7 @@ pub struct Config {
 /// yaml.v3 decodes an explicit null (`key:` with no value) as the zero value
 /// for non-pointer fields, while serde errors; [`yaml_null_as_default`]
 /// mirrors yaml.v3 so the live config keeps parsing (§4.6).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Workspace {
     #[serde(default, deserialize_with = "yaml_null_as_default")]
     pub root: String,
@@ -77,7 +77,7 @@ impl Workspace {
 }
 
 /// Where different categories of repos should be placed (Go: `config.Rules`).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Rules {
     #[serde(default, deserialize_with = "yaml_null_as_default")]
     pub base: String,
@@ -125,7 +125,7 @@ impl Rules {
 /// from `pattern` using `$1`, `${1}`, `${name}`, or `$0` for the whole match.
 /// Pattern rules take precedence over the fork/archived/base categories and
 /// are evaluated in declared order; the first match wins.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct PatternRule {
     #[serde(default, deserialize_with = "yaml_null_as_default")]
     pub pattern: String,
