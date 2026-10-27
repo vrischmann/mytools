@@ -18,63 +18,88 @@ use ratatui::widgets::Paragraph;
 /// previous frame first. The final frame stays in scrollback after exit,
 /// exactly like bubbletea's inline mode.
 pub struct Inline {
-    prev_height: usize,
+    /// Content of the previously drawn frame, for line-level diffing.
+    prev_lines: Vec<String>,
+    /// Rows the cursor sits below the frame anchor after the last draw
+    /// (grows with the frame, never shrinks below what was painted).
+    prev_rows: usize,
 }
 
 impl Inline {
     pub fn new() -> Inline {
-        Inline { prev_height: 0 }
+        Inline {
+            prev_lines: Vec::new(),
+            prev_rows: 0,
+        }
     }
 
-    /// Renders one frame at the terminal's current size. Only rows up to
-    /// the last non-blank one are written, so scrollback is not padded
-    /// with empty lines (bubbletea behavior).
+    /// Renders one frame at the terminal's current size. Frames are
+    /// diffed line by line, bubbletea-style: only changed lines are
+    /// rewritten (with a per-line clear), so an unchanged majority is
+    /// never blanked — the whole-frame erase of the first cut caused a
+    /// visible flicker on every spinner tick.
     pub fn draw(&mut self, lines: &[Line<'static>]) -> anyhow::Result<()> {
         let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
         let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height))?;
         terminal.draw(|frame| {
             frame.render_widget(Paragraph::new(lines.to_vec()), frame.area());
         })?;
-        let buffer = terminal.backend().buffer();
-        let row_is_blank = |y: u16| -> bool {
-            (0..width).all(|x| {
-                let cell = buffer.cell((x, y)).expect("cell in buffer");
-                cell.symbol() == " " && cell.fg == Color::Reset
-            })
-        };
+        let buffer = terminal.backend().buffer().clone();
+
         let mut last_row = 0usize;
         for y in (0..height as usize).rev() {
-            if !row_is_blank(y as u16) {
+            let blank = (0..width).all(|x| {
+                let cell = buffer.cell((x, y as u16)).expect("cell in buffer");
+                cell.symbol() == " " && cell.fg == Color::Reset
+            });
+            if !blank {
                 last_row = y;
                 break;
             }
         }
 
-        let mut out = io::stdout();
-        if self.prev_height > 0 {
-            // Move to the top of the previous frame and clear it. The
-            // cursor is already at column 0: every frame ends with \r\n,
-            // and cursor-up preserves the column.
-            write!(out, "\x1b[{}A\x1b[J", self.prev_height)?;
+        let new_lines: Vec<String> = (0..=last_row)
+            .map(|y| {
+                let row: Vec<&Cell> = (0..width)
+                    .map(|x| buffer.cell((x, y as u16)).expect("cell in buffer"))
+                    .collect();
+                styled_row(&row).trim_end().to_owned()
+            })
+            .collect();
+
+        // Identical frame: emit nothing, like bubbletea's renderer —
+        // no cursor churn, no repaint, no flicker window at all.
+        if new_lines == self.prev_lines {
+            return Ok(());
         }
-        let mut frame_height = 0usize;
-        for y in 0..=last_row {
-            let row: Vec<&Cell> = (0..width)
-                .map(|x| buffer.cell((x, y as u16)).expect("cell in buffer"))
-                .collect();
-            let styled = styled_row(&row);
-            // Trailing padding would push the row against the right margin,
-            // where a full-width line wraps before the line break and costs
-            // a blank line per frame. Trim it; it carries no information.
-            let styled = styled.trim_end().to_owned();
-            // Raw mode disables the \n -> \r\n translation (ONLCR), so
-            // the break must be explicit: \n alone leaves the cursor in
-            // the same column and the frame "streams" instead of redrawing.
-            write!(out, "{styled}\r\n")?;
-            frame_height += 1;
+
+        let mut out = io::stdout();
+        if self.prev_rows > 0 {
+            // The cursor sits prev_rows below the anchor; return to it.
+            write!(out, "\x1b[{}A", self.prev_rows)?;
+        }
+        // The frame box keeps its high-water mark: a shrinking frame still
+        // repaints (blanks) the rows it no longer uses, so the cursor
+        // arithmetic stays consistent.
+        let count = self.prev_rows.max(new_lines.len());
+        for i in 0..count {
+            let changed = i >= new_lines.len()
+                || i >= self.prev_lines.len()
+                || new_lines[i] != self.prev_lines[i];
+            if changed {
+                // Erase exactly this line and rewrite it — one burst, no
+                // whole-frame blank window.
+                write!(out, "\r\x1b[K")?;
+                if i < new_lines.len() {
+                    write!(out, "{}", new_lines[i])?;
+                }
+            }
+            // Raw mode needs the explicit carriage return (ONLCR is off).
+            write!(out, "\r\n")?;
         }
         out.flush()?;
-        self.prev_height = frame_height;
+        self.prev_rows = count;
+        self.prev_lines = new_lines;
         Ok(())
     }
 }
