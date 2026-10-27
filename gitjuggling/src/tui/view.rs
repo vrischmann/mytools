@@ -17,17 +17,16 @@ impl SyncApp {
             Phase::Loading => self.render_loading(),
             Phase::Resume => self.render_resume(),
             Phase::Plan => self.render_plan(),
+            Phase::DirtyConfirm => self.render_dirty_confirm(),
+            Phase::MoveConfirm => self.render_move_confirm(),
+            Phase::WorktreeConfirm => self.render_worktree_confirm(),
+            Phase::Executing => self.render_executing(),
             Phase::Summary => self.render_summary(),
-            // M5b/M5c views; unreachable from M5a's flow but rendered
+            // M5c views; unreachable from M5a's flow but rendered
             // defensively as the log tail rather than panicking.
-            Phase::DirtyConfirm
-            | Phase::MoveConfirm
-            | Phase::WorktreeConfirm
-            | Phase::Executing
-            | Phase::TrackingFix
-            | Phase::PruneList
-            | Phase::PruneConfirm
-            | Phase::PruneDone => self.render_exec_log_fallback(),
+            Phase::TrackingFix | Phase::PruneList | Phase::PruneConfirm | Phase::PruneDone => {
+                self.render_exec_log_fallback()
+            }
         }
     }
 
@@ -283,7 +282,159 @@ impl SyncApp {
         lines
     }
 
-    /// A defensive view for phases whose renderers arrive in M5b/M5c: the
+    /// Go: `renderMoveConfirm`.
+    fn render_move_confirm(&self) -> Vec<Line<'static>> {
+        if self.move_confirm_cursor >= self.move_confirm_indices.len() {
+            return Vec::new();
+        }
+        let action = &self.actions[self.move_confirm_indices[self.move_confirm_cursor]];
+        let current = self.move_confirm_cursor + 1;
+        let total = self.move_confirm_indices.len();
+        vec![
+            styles::section_header(&format!("Confirm move {current}/{total}")),
+            Line::from(""),
+            Line::from(format!(
+                "  Move {}/{} ({})?",
+                action.repo.owner,
+                action.repo.name,
+                action.repo.source_label()
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                action.current_path.to_string_lossy().into_owned(),
+                dim(),
+            )),
+            Line::from(Span::styled(
+                format!("→ {}", action.expected_path.to_string_lossy()),
+                dim(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "[y] Move  [n] Skip  [a] Move all remaining  [q] Cancel".to_owned(),
+                dim(),
+            )),
+        ]
+    }
+
+    /// Go: `renderWorktreeConfirm`.
+    fn render_worktree_confirm(&self) -> Vec<Line<'static>> {
+        if self.worktree_confirm_cursor >= self.worktree_confirm_indices.len() {
+            return Vec::new();
+        }
+        let action = &self.actions[self.worktree_confirm_indices[self.worktree_confirm_cursor]];
+        let current = self.worktree_confirm_cursor + 1;
+        let total = self.worktree_confirm_indices.len();
+
+        let branch = Span::styled(action.branch.clone(), success());
+        let (fate, command) = if action.merged {
+            (
+                vec![
+                    Span::raw("tracks branch "),
+                    branch,
+                    Span::raw(", which no longer exists upstream and has been merged.".to_owned()),
+                ],
+                format!(
+                    "git worktree remove {} && git branch -d {}",
+                    action.worktree_path.to_string_lossy(),
+                    action.branch
+                ),
+            )
+        } else {
+            (
+                vec![
+                    Span::raw("tracks branch "),
+                    branch,
+                    Span::raw(", which no longer exists upstream.".to_owned()),
+                ],
+                format!(
+                    "git worktree remove {}",
+                    action.worktree_path.to_string_lossy()
+                ),
+            )
+        };
+
+        let mut lines = vec![
+            styles::section_header(&format!("Stale worktree {current}/{total}")),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw(format!(
+                    "  {}/{} ({}): worktree at ",
+                    action.repo.owner,
+                    action.repo.name,
+                    action.repo.source_label()
+                )),
+                Span::styled(action.worktree_path.to_string_lossy().into_owned(), dim()),
+            ]),
+        ];
+        let mut fate_line = vec![Span::raw("    ")];
+        fate_line.extend(fate);
+        lines.push(Line::from(fate_line));
+        if !action.merged {
+            lines.push(Line::from(
+                "    The branch has commits not merged by ancestry (squash-merged?) and will be kept.",
+            ));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(command, dim())));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[y] Remove  [n] Skip  [a] Remove all remaining  [q] Cancel".to_owned(),
+            dim(),
+        )));
+        lines
+    }
+
+    /// Go: `renderDirtyConfirm`.
+    fn render_dirty_confirm(&self) -> Vec<Line<'static>> {
+        if self.dirty_confirm_cursor >= self.dirty_confirm_indices.len() {
+            return Vec::new();
+        }
+        let action = &self.actions[self.dirty_confirm_indices[self.dirty_confirm_cursor]];
+        let current = self.dirty_confirm_cursor + 1;
+        let total = self.dirty_confirm_indices.len();
+        vec![
+            styles::section_header(&format!("Dirty repo {current}/{total}")),
+            Line::from(""),
+            Line::from(format!(
+                "  {}/{} ({}) has uncommitted changes.",
+                action.repo.owner,
+                action.repo.name,
+                action.repo.source_label()
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("    {}", action.local_path.to_string_lossy()),
+                dim(),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  Updating stashes them first (recoverable via "),
+                Span::styled("git stash pop".to_owned(), dim()),
+                Span::raw(")."),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "[y] Stash & update  [n] Skip  [a] Stash all remaining  [q] Cancel".to_owned(),
+                dim(),
+            )),
+        ]
+    }
+
+    /// Go: `renderExecuting` — the completion counter plus the result log.
+    fn render_executing(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            styles::section_header(&format!("Executing  {}/{}", self.completed, self.total)),
+            Line::from(""),
+        ];
+        for entry in &self.exec_log {
+            lines.push(Line::from(entry.clone()));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  [q] Quit".to_owned(), dim())));
+        lines
+    }
+
+    /// A defensive view for phases whose renderers arrive in M5c: the
     /// execution log tail plus the standing key hint, so a key path that
     /// reaches an unwired phase stays usable (q always quits).
     fn render_exec_log_fallback(&self) -> Vec<Line<'static>> {

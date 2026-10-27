@@ -210,20 +210,20 @@ pub struct SyncApp {
     pub(crate) worktree_prunes: usize,
 
     // Confirmation phases
-    move_confirm_indices: Vec<usize>,
-    move_confirm_cursor: usize,
+    pub(crate) move_confirm_indices: Vec<usize>,
+    pub(crate) move_confirm_cursor: usize,
     skipped_move_indices: HashMap<usize, bool>,
-    worktree_confirm_indices: Vec<usize>,
-    worktree_confirm_cursor: usize,
+    pub(crate) worktree_confirm_indices: Vec<usize>,
+    pub(crate) worktree_confirm_cursor: usize,
     skipped_worktree_prunes: HashMap<usize, bool>,
     pub(crate) dirty_confirm_indices: Vec<usize>,
-    dirty_confirm_cursor: usize,
+    pub(crate) dirty_confirm_cursor: usize,
     pub(crate) skipped_dirty_indices: HashMap<usize, bool>,
     local_dirty: HashMap<String, bool>,
 
     // Execution phase
-    completed: usize,
-    total: usize,
+    pub(crate) completed: usize,
+    pub(crate) total: usize,
     exec_results: Vec<ActionResult>,
     pub(crate) exec_log: Vec<String>,
 
@@ -1218,6 +1218,109 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, "/tmp/ppst-iter-seq");
         assert_eq!(results[0].message, "skipped (user declined)");
+    }
+
+    // M5b validation: declined moves and dirty skips come back as
+    // success results that complete_action must drop from the durable plan.
+    #[test]
+    fn test_declined_results_are_removed_from_the_durable_plan() {
+        let repo = test_repo("vincent", "demo", crate::remote::Source::GitHub);
+        let store = null_store();
+        let mut app = test_app();
+        app.with_seams(store.clone(), None);
+
+        let mut mv = action(ActionType::Move, &repo);
+        mv.current_path = Path::new("/tmp/old").into();
+        mv.expected_path = Path::new("/tmp/new").into();
+        let mut dirty = action(ActionType::Update, &repo);
+        dirty.local_path = Path::new("/tmp/dirty").into();
+        let clone = action(ActionType::Clone, &repo);
+        app.actions = vec![mv, dirty, clone];
+        app.total = 2;
+
+        // A declined move: success with the literal §4.10 message, matched
+        // by its CURRENT path (the repo never moved).
+        app.handle_msg(Msg::ActionResult(ActionResult {
+            description: "vincent/demo (github)".to_owned(),
+            path: "/tmp/old".to_owned(),
+            success: true,
+            message: "skipped (user declined)".to_owned(),
+        }));
+        // A declined dirty update: success, matched by its local path.
+        app.handle_msg(Msg::ActionResult(ActionResult {
+            description: "vincent/demo (github)".to_owned(),
+            path: "/tmp/dirty".to_owned(),
+            success: true,
+            message: "skipped (uncommitted changes — user declined)".to_owned(),
+        }));
+
+        let saves = store.saves.lock().unwrap();
+        assert_eq!(saves.len(), 2, "each completed action persists the plan");
+        assert_eq!(
+            saves[0],
+            ("personal".to_owned(), 2),
+            "declined move dropped; dirty update and clone kept"
+        );
+        assert_eq!(
+            saves[1],
+            ("personal".to_owned(), 1),
+            "declined dirty update dropped; clone kept"
+        );
+        assert!(
+            store.deletes.lock().unwrap().is_empty(),
+            "plan never empties here"
+        );
+        assert_eq!(app.phase, Phase::Summary, "all results in -> summary");
+    }
+
+    // M5b: the confirm views render their per-item header and key hints.
+    #[test]
+    fn test_confirm_views_render_item_progress() {
+        let repo = test_repo("vincent", "demo", crate::remote::Source::GitHub);
+        let mut app = test_app();
+        let mut mv = action(ActionType::Move, &repo);
+        mv.current_path = Path::new("/tmp/old").into();
+        mv.expected_path = Path::new("/tmp/new").into();
+        let mut dirty = action(ActionType::Update, &repo);
+        dirty.local_path = Path::new("/tmp/dirty").into();
+        let mut prune = action(ActionType::PruneWorktree, &repo);
+        prune.worktree_path = Path::new("/tmp/wt").into();
+        prune.branch = "iter-seq".to_owned();
+        prune.merged = true;
+        app.actions = vec![mv, dirty, prune];
+
+        app.phase = Phase::MoveConfirm;
+        app.move_confirm_indices = vec![0];
+        let rendered = app.render();
+        let text: Vec<String> = rendered.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("Confirm move 1/1")));
+        assert!(text.iter().any(|l| l.contains("[y] Move  [n] Skip")));
+
+        app.phase = Phase::DirtyConfirm;
+        app.dirty_confirm_indices = vec![1];
+        let rendered = app.render();
+        let text: Vec<String> = rendered.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("Dirty repo 1/1")));
+        assert!(text.iter().any(|l| l.contains("git stash pop")));
+
+        app.phase = Phase::WorktreeConfirm;
+        app.worktree_confirm_indices = vec![2];
+        let rendered = app.render();
+        let text: Vec<String> = rendered.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("Stale worktree 1/1")));
+        assert!(text.iter().any(|l| l.contains("git branch -d iter-seq")));
+
+        app.phase = Phase::Executing;
+        app.completed = 1;
+        app.total = 3;
+        app.exec_log = vec!["vincent/demo (github) cloned".to_owned()];
+        let rendered = app.render();
+        let text: Vec<String> = rendered.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("Executing  1/3")));
+        assert!(
+            text.iter()
+                .any(|l| l.contains("vincent/demo (github) cloned"))
+        );
     }
 
     // Extra beyond the Go set: a cancelled token is visible to the runner
