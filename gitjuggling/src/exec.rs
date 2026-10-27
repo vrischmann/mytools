@@ -1038,4 +1038,337 @@ mod tests {
         assert!(output.status.success(), "git branch --list failed");
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
+
+    // ------------------------------------------------------------------
+    // M4 layer: end-to-end against a local bare "origin", the §4.10
+    // stash pin, the execute_actions runner contract, and dry-run
+    // immutability (RUST_REWRITE_PLAN.md §5 phase M4).
+    // ------------------------------------------------------------------
+
+    /// A Forgejo-sourced remote repo (its clones run plain, no askpass)
+    /// whose clone URL points at a local bare origin.
+    fn e2e_repo(name: &str, clone_url: &Path) -> RemoteRepo {
+        RemoteRepo {
+            name: name.to_owned(),
+            owner: "vincent".to_owned(),
+            is_fork: false,
+            is_archived: false,
+            is_mirror: false,
+            clone_url: clone_url.to_string_lossy().into_owned(),
+            source: Source::Forgejo,
+        }
+    }
+
+    /// An `Action` with every field spelled out (Go's zero value equivalent;
+    /// no `Default` derive on the struct).
+    fn e2e_action(action_type: ActionType, repo: RemoteRepo) -> Action {
+        Action {
+            action_type,
+            repo,
+            local_path: PathBuf::new(),
+            current_path: PathBuf::new(),
+            expected_path: PathBuf::new(),
+            already_in_place: false,
+            worktree_path: PathBuf::new(),
+            main_repo_path: PathBuf::new(),
+            branch: String::new(),
+            merged: false,
+        }
+    }
+
+    /// `git <args>` in `dir`, asserting success and returning combined
+    /// output (mirrors the Go tests' inline exec.Command probes).
+    fn git_ok(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} in {} failed: {}",
+            args,
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+
+    /// The M4 temp-repo end-to-end: clone from a local bare "origin", then
+    /// update after the origin advances (stash + pull, never popped — §4.10),
+    /// then move to a rules-derived path, then prune a stale worktree of the
+    /// moved repo.
+    #[test]
+    fn test_execute_action_lifecycle_against_bare_origin() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let origin = root.join("origin.git");
+        fixtures::bare_repo(&origin);
+        let origin_url = origin.to_string_lossy().into_owned();
+        let repo = e2e_repo("demo", &origin);
+
+        // A second clone, used later to advance the origin.
+        let other = root.join("other");
+        fixtures::clone(&origin_url, &other);
+
+        // 1. Clone into the workspace.
+        let ws = root.join("ws");
+        let demo = ws.join("demo");
+        let mut action = e2e_action(ActionType::Clone, repo.clone());
+        action.expected_path = demo.clone();
+        let result = execute_action(&action, None, "", None);
+        assert!(result.success, "clone failed: {}", result.message);
+        assert_eq!(result.description, "vincent/demo (forgejo)");
+        assert_eq!(result.path, path_string(&demo));
+        assert_eq!(result.message, "cloned");
+        assert!(demo.join(".git").exists());
+
+        // 2. Update: advance the origin, dirty the clone, then stash+pull.
+        std::fs::write(other.join("second.txt"), "second").expect("write second.txt");
+        git_ok(&other, &["add", "."]);
+        git_ok(&other, &["commit", "-m", "second"]);
+        git_ok(&other, &["push", "origin", "master"]);
+
+        std::fs::write(demo.join("dirty.txt"), "dirty").expect("write dirty.txt");
+
+        let mut action = e2e_action(ActionType::Update, repo.clone());
+        action.local_path = demo.clone();
+        let result = execute_action(&action, None, "", None);
+        assert!(result.success, "update failed: {}", result.message);
+        assert_eq!(result.message, "updated");
+        assert_eq!(result.path, path_string(&demo));
+        // The pull brought the second commit's file in.
+        assert!(demo.join("second.txt").exists());
+        // §4.10 pin: the stash is never popped — the uncommitted work lives
+        // in the stash, not the tree.
+        assert!(
+            !demo.join("dirty.txt").exists(),
+            "stashed file must be gone from the tree"
+        );
+        let stash_list = git_ok(&demo, &["stash", "list"]);
+        assert!(
+            !stash_list.trim().is_empty(),
+            "stash entry must survive the update"
+        );
+
+        // 3. Move to the rules-derived path.
+        let moved = ws.join("repos").join("demo");
+        let mut action = e2e_action(ActionType::Move, repo.clone());
+        action.current_path = demo.clone();
+        action.expected_path = moved.clone();
+        let result = execute_action(&action, None, "", None);
+        assert!(result.success, "move failed: {}", result.message);
+        assert_eq!(result.message, "moved");
+        assert_eq!(result.path, path_string(&moved));
+        assert!(moved.join(".git").exists());
+        assert!(!demo.exists());
+
+        // 4. Prune a stale worktree of the moved repo (merged branch).
+        let wt = ws.join("demo-wt");
+        fixtures::worktree(&moved, &wt, "wt", false);
+        let mut action = e2e_action(ActionType::PruneWorktree, repo);
+        action.worktree_path = wt.clone();
+        action.main_repo_path = moved.clone();
+        action.branch = "wt".to_owned();
+        action.merged = true;
+        let result = execute_action(&action, None, "", None);
+        assert!(result.success, "prune failed: {}", result.message);
+        assert_eq!(
+            result.message,
+            "removed stale worktree and merged branch wt"
+        );
+        assert_eq!(result.path, path_string(&wt));
+        assert!(!wt.exists());
+        let branches = git_ok(&moved, &["branch", "--list", "wt"]);
+        assert!(
+            branches.trim().is_empty(),
+            "branch wt should be deleted, got {branches:?}"
+        );
+    }
+
+    /// The runner streams results in completion order until the channel
+    /// closes (Go: ExecuteActions closes `out` when all actions finish);
+    /// three clones of distinct bare origins under concurrency 2.
+    #[test]
+    fn test_execute_actions_streams_until_channel_closes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        let mut actions = Vec::new();
+        let mut want_paths = std::collections::BTreeSet::new();
+        for i in 0..3 {
+            let origin = root.join(format!("origin{i}.git"));
+            fixtures::bare_repo(&origin);
+            let expected = root.join("ws").join(format!("demo{i}"));
+            let mut action = e2e_action(ActionType::Clone, e2e_repo(&format!("demo{i}"), &origin));
+            action.expected_path = expected.clone();
+            want_paths.insert(path_string(&expected));
+            actions.push(action);
+        }
+
+        let cancel = CancelToken::new();
+        let rx = execute_actions(&actions, false, None, 2, "", &cancel);
+        let results: Vec<ActionResult> = rx.into_iter().collect();
+
+        assert_eq!(results.len(), 3, "one result per action, then close");
+        for result in &results {
+            assert!(result.success, "clone failed: {}", result.message);
+            assert_eq!(result.message, "cloned");
+        }
+        let got_paths: std::collections::BTreeSet<String> =
+            results.iter().map(|r| r.path.clone()).collect();
+        assert_eq!(
+            got_paths, want_paths,
+            "completion order is free; the set is not"
+        );
+        for path in &want_paths {
+            assert!(
+                PathBuf::from(path).join(".git").exists(),
+                "clone landed: {path}"
+            );
+        }
+    }
+
+    /// A cancellation observed while an action is in flight lets that
+    /// action finish while nothing new is scheduled — the runner's re-check
+    /// after the semaphore acquire is what makes this deterministic at
+    /// concurrency 1 (Go: ctx cancel stops scheduling, in-flight runs
+    /// complete).
+    #[test]
+    fn test_execute_actions_cancel_stops_scheduling_inflight_completes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let repo = e2e_repo("demo", &root.join("unused.git"));
+
+        let a_path = root.join("a");
+        let b_path = root.join("b");
+        fixtures::repo(&a_path, "https://example.com/unused/a.git");
+        fixtures::repo(&b_path, "https://example.com/unused/b.git");
+
+        let moved_a = root.join("ws").join("a");
+        let moved_b = root.join("ws").join("b");
+
+        let mut action_a = e2e_action(ActionType::Move, repo.clone());
+        action_a.current_path = a_path.clone();
+        action_a.expected_path = moved_a.clone();
+        let mut action_b = e2e_action(ActionType::Move, repo);
+        action_b.current_path = b_path.clone();
+        action_b.expected_path = moved_b.clone();
+
+        // The first action's confirmation cancels the run while it is in
+        // flight; with concurrency 1 the orchestrator blocks acquiring the
+        // second slot, then re-checks and must not schedule action B.
+        let cancel = CancelToken::new();
+        let cancel_for_confirm = cancel.clone();
+        let confirm: Arc<ConfirmFn> = Arc::new(move |_prompt| {
+            cancel_for_confirm.cancel();
+            true
+        });
+
+        let rx = execute_actions(&[action_a, action_b], false, Some(confirm), 1, "", &cancel);
+        let results: Vec<ActionResult> = rx.into_iter().collect();
+
+        assert_eq!(results.len(), 1, "only the in-flight action may finish");
+        let result = &results[0];
+        assert!(result.success, "move failed: {}", result.message);
+        assert_eq!(result.message, "moved");
+        assert_eq!(result.path, path_string(&moved_a));
+        assert!(moved_a.exists(), "in-flight action completed on disk");
+        assert!(!moved_b.exists(), "second action must not be scheduled");
+        assert!(b_path.exists(), "second repo untouched");
+    }
+
+    /// dry_run_action reports every action type's message without touching
+    /// the filesystem, and execute_actions(dry_run=true) routes through it.
+    #[test]
+    fn test_dry_run_action_reports_without_mutating() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let origin = root.join("origin.git");
+        fixtures::bare_repo(&origin);
+        let repo = e2e_repo("demo", &origin);
+
+        // A real repo to point update/move/prune at, with a linked worktree.
+        let demo = root.join("demo");
+        fixtures::repo(&demo, "https://example.com/unused/demo.git");
+        std::fs::write(demo.join("dirty.txt"), "dirty").expect("write dirty.txt");
+        let wt = root.join("demo-wt");
+        fixtures::worktree(&demo, &wt, "wt", false);
+
+        let moved = root.join("ws").join("demo");
+        let cloned = root.join("ws").join("clone");
+        let mut update = e2e_action(ActionType::Update, repo.clone());
+        update.local_path = demo.clone();
+        let mut mv = e2e_action(ActionType::Move, repo.clone());
+        mv.current_path = demo.clone();
+        mv.expected_path = moved.clone();
+        let mut clone = e2e_action(ActionType::Clone, repo.clone());
+        clone.expected_path = cloned.clone();
+        let mut prune = e2e_action(ActionType::PruneWorktree, repo);
+        prune.worktree_path = wt.clone();
+        prune.main_repo_path = demo.clone();
+        prune.branch = "wt".to_owned();
+        prune.merged = false;
+
+        // dry_run_action's path/message per type, verbatim from the Go
+        // wording (execute.go dryRunAction).
+        let expected = [
+            (
+                path_string(&demo),
+                "would update (stash + pull --rebase)".to_owned(),
+            ),
+            (
+                path_string(&moved),
+                format!(
+                    "would move: {} → {}",
+                    path_string(&demo),
+                    path_string(&moved)
+                ),
+            ),
+            (path_string(&cloned), "would clone".to_owned()),
+            (
+                path_string(&wt),
+                "would remove stale worktree (branch wt kept — not fully merged)".to_owned(),
+            ),
+        ];
+
+        let actions = [update, mv, clone, prune];
+        for (action, (path, message)) in actions.iter().zip(&expected) {
+            let result = dry_run_action(action);
+            assert!(result.success, "dry run reports success: {result:?}");
+            assert_eq!(result.path, *path);
+            assert_eq!(result.message, *message);
+            assert_eq!(result.description, "vincent/demo (forgejo)");
+        }
+
+        // No mutations: the dirty file survives, nothing moved or cloned,
+        // the worktree survives.
+        assert!(demo.join("dirty.txt").exists());
+        assert!(!root.join("ws").exists());
+        assert!(wt.join(".git").exists());
+
+        // The runner's dry-run path routes every action through it.
+        let cancel = CancelToken::new();
+        let rx = execute_actions(&actions, true, None, 2, "", &cancel);
+        let results: Vec<ActionResult> = rx.into_iter().collect();
+        assert_eq!(results.len(), 4);
+        let by_path: std::collections::HashMap<String, &ActionResult> =
+            results.iter().map(|r| (r.path.clone(), r)).collect();
+        for (path, message) in &expected {
+            let result = by_path
+                .get(path)
+                .unwrap_or_else(|| panic!("dry-run result for {path} missing"));
+            assert!(result.success);
+            assert_eq!(result.message, *message);
+        }
+
+        // Still no mutations after the runner pass.
+        assert!(demo.join("dirty.txt").exists());
+        assert!(!root.join("ws").exists());
+    }
 }
