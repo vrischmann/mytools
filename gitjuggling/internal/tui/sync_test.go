@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -12,6 +14,35 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSyncPrunesAgainstAllFetchedRepos(t *testing.T) {
+	root := t.TempDir()
+	ws := &config.Workspace{Root: root, Rules: config.Rules{Base: root}}
+	github := &remote.RemoteRepo{Owner: "alice", Name: "tool", Source: remote.SourceGitHub, CloneURL: "https://github.com/alice/tool.git"}
+	forgejo := &remote.RemoteRepo{Owner: "alice", Name: "tool", Source: remote.SourceForgejo, CloneURL: "git@forgejo.example:alice/tool.git"}
+	mirror := &remote.RemoteRepo{Owner: "alice", Name: "mirror", Source: remote.SourceForgejo, IsMirror: true, CloneURL: "git@forgejo.example:alice/mirror.git"}
+	local := discover.NewLocalRepos([]discover.LocalRepo{
+		{Path: filepath.Join(root, "tool"), RemoteURLs: map[string]string{"origin": github.CloneURL}},
+		{Path: filepath.Join(root, "forgejo-tool"), RemoteURLs: map[string]string{"origin": "https://forgejo.example/alice/tool.git"}},
+		{Path: filepath.Join(root, "mirror"), RemoteURLs: map[string]string{"origin": mirror.CloneURL}},
+		{Path: filepath.Join(root, "orphan"), RemoteURLs: map[string]string{"origin": "https://forgejo.example/alice/deleted.git"}},
+	})
+
+	m := NewSyncModel("test", ws, true, true, true, true, 1, nil)
+	defer m.cancel()
+	model, _ := m.Update(syncGithubReposMsg{repos: []*remote.RemoteRepo{github}})
+	model, _ = model.Update(syncForgejoReposMsg{repos: []*remote.RemoteRepo{forgejo, mirror}})
+	model, _ = model.Update(syncLocalReposMsg{local: local})
+	planned := model.(SyncModel)
+	require.Len(t, planned.actions, 1)
+	require.Same(t, github, planned.actions[0].Repo)
+
+	model, _ = planned.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	pruning := model.(SyncModel)
+	require.Equal(t, syncPhasePruneList, pruning.phase)
+	require.Len(t, pruning.orphans, 1)
+	require.Equal(t, filepath.Join(root, "orphan"), pruning.orphans[0].Path)
+}
 
 func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}

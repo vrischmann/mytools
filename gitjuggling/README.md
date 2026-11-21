@@ -17,7 +17,7 @@ Flags:
 - `--dry-run` — show what would be done without making changes
 - `--interactive` — prompt before destructive actions (default: true)
 - `--prune` — remove local repos with no upstream match. Pruning keeps repositories
-  that contain another checkout.
+  that contain another checkout and recognises all fetched remotes, including Forgejo mirrors.
 - `--skip-pull` — skip `git pull` for repos already in the expected location
 - `-c, --concurrency` — concurrency limit (default: 2)
 

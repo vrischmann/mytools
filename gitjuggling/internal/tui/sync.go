@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
@@ -615,17 +616,7 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.doPrune && m.localRepos != nil {
-		allRemote := append(m.githubRepos, m.forgejoRepos...)
-		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
-		if len(m.orphans) > 0 {
-			m.phase = syncPhasePruneList
-			return m, nil
-		}
-	}
-
-	m.phase = syncPhaseSummary
-	return m, tea.Quit
+	return m.enterPruneOrSummary()
 }
 
 // ---------------------------------------------------------------------------
@@ -690,12 +681,10 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.localDirty = msg.dirty
 		m.loadingSteps[2].done = true
 
-		// Dedup and build plan
+		// Keep the complete fetched inventory for orphan detection.
 		githubRepos, forgejoRepos := remote.DedupRepos(m.githubRepos, m.forgejoRepos)
-		m.githubRepos = githubRepos
-		m.forgejoRepos = forgejoRepos
-
-		m.setPlan(syncplan.BuildPlan(append(m.githubRepos, m.forgejoRepos...), m.localRepos, m.ws, execute.RemoteBranchExists))
+		reposToSync := slices.Concat(githubRepos, forgejoRepos)
+		m.setPlan(syncplan.BuildPlan(reposToSync, m.localRepos, m.ws, execute.RemoteBranchExists))
 		if !m.dryRun {
 			var err error
 			if len(m.actions) == 0 {
@@ -741,7 +730,7 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.trackingFixCursor++
 		if m.trackingFixCursor >= len(m.trackingFixItems) {
-			return m.afterTrackingFix()
+			return m.enterPruneOrSummary()
 		}
 		return m, nil
 	}
@@ -877,7 +866,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.trackingFixCursor++
 			if m.trackingFixCursor >= len(m.trackingFixItems) {
-				return m.afterTrackingFix()
+				return m.enterPruneOrSummary()
 			}
 			return m, nil
 		case "n", "N":
@@ -890,7 +879,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			})
 			m.trackingFixCursor++
 			if m.trackingFixCursor >= len(m.trackingFixItems) {
-				return m.afterTrackingFix()
+				return m.enterPruneOrSummary()
 			}
 			return m, nil
 		case "q", "ctrl+c":
@@ -903,7 +892,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Message:     "no tracking branch (skipped)",
 				})
 			}
-			return m.afterTrackingFix()
+			return m.enterPruneOrSummary()
 		}
 
 	case syncPhaseExecuting:
@@ -1398,9 +1387,9 @@ func formatActionResult(r execute.ActionResult) string {
 	}
 }
 
-func (m SyncModel) afterTrackingFix() (tea.Model, tea.Cmd) {
+func (m SyncModel) enterPruneOrSummary() (tea.Model, tea.Cmd) {
 	if m.doPrune && m.localRepos != nil {
-		allRemote := append(m.githubRepos, m.forgejoRepos...)
+		allRemote := slices.Concat(m.githubRepos, m.forgejoRepos)
 		m.orphans = prune.FindOrphans(m.localRepos, allRemote, m.ws)
 		if len(m.orphans) > 0 {
 			m.phase = syncPhasePruneList

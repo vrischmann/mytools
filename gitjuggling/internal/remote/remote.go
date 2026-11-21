@@ -38,8 +38,8 @@ func (r *RemoteRepo) DedupKey() [2]string {
 	return [2]string{strings.ToLower(r.Owner), strings.ToLower(r.Name)}
 }
 
-// DedupRepos removes Forgejo repos that duplicate GitHub repos (same owner/name).
-// It returns the modified github and forgejo slices.
+// DedupRepos selects repos for sync, excluding Forgejo mirrors and Forgejo
+// repos with the same owner and name as a GitHub repo.
 func DedupRepos(github, forgejo []*RemoteRepo) ([]*RemoteRepo, []*RemoteRepo) {
 	githubKeys := make(map[[2]string]struct{}, len(github))
 	for _, r := range github {
@@ -48,7 +48,7 @@ func DedupRepos(github, forgejo []*RemoteRepo) ([]*RemoteRepo, []*RemoteRepo) {
 
 	var filtered []*RemoteRepo
 	for _, r := range forgejo {
-		if _, dup := githubKeys[r.DedupKey()]; !dup {
+		if _, dup := githubKeys[r.DedupKey()]; !r.IsMirror && !dup {
 			filtered = append(filtered, r)
 		}
 	}

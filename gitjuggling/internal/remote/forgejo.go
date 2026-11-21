@@ -58,7 +58,7 @@ func forgejoToken(tokenOrSecretRef string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// FetchForgejoRepos fetches all repos for the given Forgejo user, filtering out mirrors.
+// FetchForgejoRepos fetches all repos for the given Forgejo user, including mirrors.
 func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 	token, err := forgejoToken(tokenRef)
 	if err != nil {
@@ -84,40 +84,42 @@ func FetchForgejoRepos(baseURL, user, tokenRef string) ([]*RemoteRepo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("request to Forgejo API failed for user %q at %s: %w", user, baseURL, err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("forgejo API returned %d for user %q", resp.StatusCode, user)
+		pageRepos, err := readForgejoPage(resp, user)
+		if err != nil {
+			return nil, err
 		}
-
-		var pageRepos []forgejoRepo
-		if err := json.NewDecoder(resp.Body).Decode(&pageRepos); err != nil {
-			return nil, fmt.Errorf("decoding Forgejo response: %w", err)
-		}
-
 		if len(pageRepos) == 0 {
 			break
 		}
-
-		for _, r := range pageRepos {
-			// Skip mirrors — they are duplicates of GitHub repos
-			if r.Mirror {
-				continue
-			}
-
-			repos = append(repos, &RemoteRepo{
-				Name:       r.Name,
-				Owner:      r.Owner.Login,
-				IsFork:     r.Fork,
-				IsArchived: r.Archived,
-				IsMirror:   r.Mirror,
-				CloneURL:   httpsToSSH(r.CloneURL),
-				Source:     SourceForgejo,
-			})
-		}
-
+		repos = append(repos, pageRepos...)
 		page++
 	}
 
+	return repos, nil
+}
+
+func readForgejoPage(resp *http.Response, user string) ([]*RemoteRepo, error) {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("forgejo API returned %d for user %q", resp.StatusCode, user)
+	}
+
+	var page []forgejoRepo
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, fmt.Errorf("decoding Forgejo response: %w", err)
+	}
+
+	repos := make([]*RemoteRepo, 0, len(page))
+	for _, r := range page {
+		repos = append(repos, &RemoteRepo{
+			Name:       r.Name,
+			Owner:      r.Owner.Login,
+			IsFork:     r.Fork,
+			IsArchived: r.Archived,
+			IsMirror:   r.Mirror,
+			CloneURL:   httpsToSSH(r.CloneURL),
+			Source:     SourceForgejo,
+		})
+	}
 	return repos, nil
 }
