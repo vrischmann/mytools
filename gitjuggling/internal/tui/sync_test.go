@@ -8,6 +8,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
@@ -238,11 +239,11 @@ func TestBuildExecutableActionsSkipsDeclinedWorktreePrunes(t *testing.T) {
 		actions: []syncplan.Action{
 			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/ppst"},
 			{
-				Type:         syncplan.ActionPruneWorktree,
-				Repo:         repo,
-				WorktreePath: "/tmp/ppst-iter-seq",
-				MainRepoPath: "/tmp/ppst",
-				Branch:       "iter-seq",
+				Type:          syncplan.ActionPruneWorktree,
+				Repo:          repo,
+				WorktreePath:  "/tmp/ppst-iter-seq",
+				MainRepoPath:  "/tmp/ppst",
+				WorktreeState: git.WorktreeState{Branch: "iter-seq"},
 			},
 		},
 		skippedWorktreePrunes: map[int]bool{1: true},

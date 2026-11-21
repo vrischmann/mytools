@@ -1071,13 +1071,17 @@ func (m SyncModel) renderWorktreeConfirm() string {
 	current := m.worktreeConfirmCursor + 1
 	total := len(m.worktreeConfirmIndices)
 
-	var fate, command string
+	upstream := action.Upstream.Remote + "/" + action.Upstream.Branch
+	fate := fmt.Sprintf("Branch %s tracks %s, which no longer exists.", SuccessStyle.Render(action.Branch), upstream)
+	command := fmt.Sprintf("git worktree remove %s", action.WorktreePath)
+	if action.Upstream.Remote == "" {
+		fate = fmt.Sprintf("The saved plan marks branch %s as stale.", SuccessStyle.Render(action.Branch))
+	}
 	if action.Merged {
-		fate = fmt.Sprintf("tracks branch %s, which no longer exists upstream and has been merged.", SuccessStyle.Render(action.Branch))
-		command = fmt.Sprintf("git worktree remove %s && git branch -d %s", action.WorktreePath, action.Branch)
+		fate += "\n    The branch is merged into the remote's default branch."
+		command += fmt.Sprintf(" && git branch -d %s", action.Branch)
 	} else {
-		fate = fmt.Sprintf("tracks branch %s, which no longer exists upstream.\n    The branch has commits not merged by ancestry (squash-merged?) and will be kept.", SuccessStyle.Render(action.Branch))
-		command = fmt.Sprintf("git worktree remove %s", action.WorktreePath)
+		fate += "\n    The local branch will be kept."
 	}
 
 	return fmt.Sprintf(

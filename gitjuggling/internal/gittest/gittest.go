@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func run(t *testing.T, dir string, args ...string) {
+// Run executes Git with a test identity and returns its trimmed output.
+func Run(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -21,6 +23,7 @@ func run(t *testing.T, dir string, args ...string) {
 	)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
+	return strings.TrimSpace(string(out))
 }
 
 // Repo creates a git repo at path with a single commit on master and origin
@@ -29,13 +32,13 @@ func run(t *testing.T, dir string, args ...string) {
 func Repo(t *testing.T, path, originURL string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(path, 0o755))
-	run(t, path, "init", "-b", "master", ".")
-	run(t, path, "remote", "add", "origin", originURL)
+	Run(t, path, "init", "-b", "master", ".")
+	Run(t, path, "remote", "add", "origin", originURL)
 	require.NoError(t, os.WriteFile(filepath.Join(path, "README.md"), []byte("test"), 0o644))
-	run(t, path, "add", ".")
-	run(t, path, "commit", "-m", "init")
-	run(t, path, "update-ref", "refs/remotes/origin/master", "HEAD")
-	run(t, path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+	Run(t, path, "add", ".")
+	Run(t, path, "commit", "-m", "init")
+	Run(t, path, "update-ref", "refs/remotes/origin/master", "HEAD")
+	Run(t, path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 }
 
 // Worktree creates a linked worktree with a new branch at path of the repo
@@ -44,11 +47,19 @@ func Repo(t *testing.T, path, originURL string) {
 // squash-merged or genuinely unmerged branches).
 func Worktree(t *testing.T, repoPath, path, branch string, diverged bool) {
 	t.Helper()
-	run(t, repoPath, "worktree", "add", "-b", branch, path, "HEAD")
+	Run(t, repoPath, "worktree", "add", "-b", branch, path, "HEAD")
 
 	if diverged {
 		require.NoError(t, os.WriteFile(filepath.Join(path, "wip.txt"), []byte("wip"), 0o644))
-		run(t, path, "add", ".")
-		run(t, path, "commit", "-m", "wip")
+		Run(t, path, "add", ".")
+		Run(t, path, "commit", "-m", "wip")
 	}
+}
+
+// BareRemote creates a local remote for tests that exercise ls-remote or push.
+func BareRemote(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir()
+	Run(t, path, "init", "--bare", "-b", "master")
+	return path
 }

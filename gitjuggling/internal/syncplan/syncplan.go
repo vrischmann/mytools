@@ -34,11 +34,9 @@ type Action struct {
 	// Worktree fields, set for ActionPruneWorktree.
 	WorktreePath string // directory of the stale worktree
 	MainRepoPath string // main clone the worktree belongs to
-	Branch       string // checked-out branch whose upstream is gone
-	// Merged reports whether Branch is merged into the default branch by
-	// ancestry (git branch --merged). When false the branch is kept after
-	// removing the worktree: its commits may be squash-merged or unmerged,
-	// and git branch -d would refuse anyway.
+	git.WorktreeState
+	// Merged records whether the commit was merged into the tracking
+	// remote's default branch when the plan was built.
 	Merged bool
 }
 
@@ -198,23 +196,23 @@ func worktreePruneActions(remoteRepos []*remote.RemoteRepo, local *discover.Loca
 			continue
 		}
 
-		branch, err := git.CurrentBranch(wt.Path)
+		state, err := git.ReadWorktreeState(wt.Path)
 		if err != nil {
-			continue // detached HEAD or unreadable repo; leave it alone
+			continue
 		}
 
-		exists, err := branchExists(wt.Path, "origin", branch)
+		exists, err := branchExists(wt.Path, state.Upstream.Remote, state.Upstream.Branch)
 		if err != nil || exists {
 			continue // only prune when we can confirm the upstream is gone
 		}
 
 		actions = append(actions, Action{
-			Type:         ActionPruneWorktree,
-			Repo:         repo,
-			WorktreePath: wt.Path,
-			MainRepoPath: wt.MainPath,
-			Branch:       branch,
-			Merged:       worktreeBranchMerged(wt, branch),
+			Type:          ActionPruneWorktree,
+			Repo:          repo,
+			WorktreePath:  wt.Path,
+			MainRepoPath:  wt.MainPath,
+			WorktreeState: state,
+			Merged:        git.IsAncestor(wt.Path, state.Commit, "refs/remotes/"+state.Upstream.Remote+"/HEAD"),
 		})
 	}
 	return actions
@@ -231,20 +229,4 @@ func matchRemoteRepo(remoteRepos []*remote.RemoteRepo, repo *discover.LocalRepo)
 		}
 	}
 	return nil
-}
-
-// worktreeBranchMerged reports whether the worktree's branch has been merged
-// into the default branch of its origin. Any error (missing origin/HEAD,
-// missing remote-tracking ref, git failure) counts as not merged so the
-// branch is kept on the safe side.
-func worktreeBranchMerged(wt *discover.LocalRepo, branch string) bool {
-	defaultBranch, err := git.DefaultBranch(wt.Path, "origin")
-	if err != nil {
-		return false
-	}
-	merged, err := git.IsBranchMerged(wt.Path, branch, defaultBranch)
-	if err != nil {
-		return false
-	}
-	return merged
 }

@@ -1,11 +1,13 @@
 package syncplan
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"github.com/stretchr/testify/require"
@@ -380,6 +382,7 @@ func TestBuildPlanPrunesStaleWorktree(t *testing.T) {
 	const url = "ssh://git@git.rischmann.fr/vincent/ppst.git"
 	gittest.Repo(t, mainPath, url)
 	gittest.Worktree(t, mainPath, wtPath, "iter-seq", false)
+	trackGoneBranch(t, wtPath, "iter-seq")
 
 	repo := &remote.RemoteRepo{
 		Name: "ppst", Owner: "vincent", CloneURL: url, Source: remote.SourceForgejo,
@@ -415,6 +418,7 @@ func TestBuildPlanKeepsWorktreeWhenBranchExistsUpstream(t *testing.T) {
 	const url = "ssh://git@git.rischmann.fr/vincent/ppst.git"
 	gittest.Repo(t, mainPath, url)
 	gittest.Worktree(t, mainPath, wtPath, "iter-seq", false)
+	trackGoneBranch(t, wtPath, "iter-seq")
 
 	repo := &remote.RemoteRepo{
 		Name: "ppst", Owner: "vincent", CloneURL: url, Source: remote.SourceForgejo,
@@ -441,6 +445,7 @@ func TestBuildPlanPrunesUnmergedWorktreeKeepsBranchFlag(t *testing.T) {
 	const url = "ssh://git@git.rischmann.fr/vincent/ppst.git"
 	gittest.Repo(t, mainPath, url)
 	gittest.Worktree(t, mainPath, wtPath, "iter-seq", true) // branch has unmerged work
+	trackGoneBranch(t, wtPath, "iter-seq")
 
 	repo := &remote.RemoteRepo{
 		Name: "ppst", Owner: "vincent", CloneURL: url, Source: remote.SourceForgejo,
@@ -470,6 +475,7 @@ func TestBuildPlanWorktreeOfUnknownRepoIgnored(t *testing.T) {
 	const url = "ssh://git@git.rischmann.fr/vincent/other.git"
 	gittest.Repo(t, mainPath, url)
 	gittest.Worktree(t, mainPath, wtPath, "gone-branch", false)
+	trackGoneBranch(t, wtPath, "gone-branch")
 
 	local := discover.NewLocalRepos([]discover.LocalRepo{
 		{Path: wtPath, RemoteURLs: map[string]string{"origin": url}, IsWorktree: true, MainPath: mainPath},
@@ -492,6 +498,7 @@ func TestBuildPlanNilBranchExistsSkipsWorktrees(t *testing.T) {
 	const url = "ssh://git@git.rischmann.fr/vincent/ppst.git"
 	gittest.Repo(t, mainPath, url)
 	gittest.Worktree(t, mainPath, wtPath, "iter-seq", false)
+	trackGoneBranch(t, wtPath, "iter-seq")
 
 	repo := &remote.RemoteRepo{
 		Name: "ppst", Owner: "vincent", CloneURL: url, Source: remote.SourceForgejo,
@@ -506,4 +513,52 @@ func TestBuildPlanNilBranchExistsSkipsWorktrees(t *testing.T) {
 	for _, a := range actions {
 		require.NotEqual(t, ActionPruneWorktree, a.Type)
 	}
+}
+
+func trackGoneBranch(t *testing.T, path, branch string) {
+	t.Helper()
+	gittest.Run(t, path, "config", "branch."+branch+".remote", "origin")
+	gittest.Run(t, path, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+}
+
+func TestWorktreePruneUsesConfiguredUpstream(t *testing.T) {
+	root := t.TempDir()
+	mainPath := filepath.Join(root, "demo")
+	wt := filepath.Join(root, "checkout")
+	origin, team := gittest.BareRemote(t), gittest.BareRemote(t)
+	gittest.Repo(t, mainPath, origin)
+	gittest.Worktree(t, mainPath, wt, "local-topic", false)
+	local, err := discover.Discover(root)
+	require.NoError(t, err)
+	repos := []*remote.RemoteRepo{{Name: "demo", CloneURL: origin}}
+	ws := &config.Workspace{Root: root, Rules: config.Rules{Base: root}}
+	plan := func(check BranchExistsFunc) []Action { return BuildPlan(repos, local, ws, check) }
+	noLookup := func(_, _, _ string) (bool, error) {
+		t.Fatal("looked up a branch without a remote upstream")
+		return false, nil
+	}
+	require.Len(t, plan(noLookup), 1, "never-pushed branch")
+	gittest.Run(t, wt, "branch", "--set-upstream-to=master")
+	require.Len(t, plan(noLookup), 1, "local upstream")
+
+	gittest.Run(t, wt, "remote", "add", "team", team)
+	gittest.Run(t, wt, "push", "team", "master")
+	gittest.Run(t, wt, "remote", "set-head", "team", "master")
+	gittest.Run(t, wt, "push", "-u", "team", "HEAD:refs/heads/published/topic")
+	require.Len(t, plan(git.RemoteBranchExists), 1, "published under a different name on another remote")
+	gittest.Run(t, team, "update-ref", "-d", "refs/heads/published/topic")
+	gittest.Run(t, wt, "fetch", "--prune", "team")
+	require.Len(t, plan(func(_, _, _ string) (bool, error) {
+		return false, errors.New("unreachable")
+	}), 1)
+
+	actions := plan(git.RemoteBranchExists)
+	require.Len(t, actions, 2)
+	require.Equal(t, ActionPruneWorktree, actions[1].Type)
+	require.Equal(t, "local-topic", actions[1].Branch)
+	require.Equal(t, git.Upstream{Remote: "team", Branch: "published/topic"}, actions[1].Upstream)
+	require.True(t, actions[1].Merged)
+	gittest.Run(t, wt, "commit", "--allow-empty", "-m", "local work")
+	gittest.Run(t, mainPath, "merge", "--ff-only", "local-topic")
+	require.False(t, plan(git.RemoteBranchExists)[1].Merged, "only the local default branch contains the commit")
 }

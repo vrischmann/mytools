@@ -9,15 +9,15 @@ import (
 
 // CurrentBranch returns the current branch name for a git repo.
 func CurrentBranch(localPath string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "HEAD")
 	cmd.Dir = localPath
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w", err)
+		return "", fmt.Errorf("reading checked-out branch: %w", err)
 	}
-	branch := strings.TrimSpace(string(output))
-	if branch == "HEAD" {
-		return "", fmt.Errorf("repository is in detached HEAD state")
+	branch, ok := strings.CutPrefix(strings.TrimSpace(string(output)), "refs/heads/")
+	if !ok {
+		return "", fmt.Errorf("HEAD does not point to a local branch")
 	}
 	return branch, nil
 }
@@ -72,15 +72,15 @@ func IsBranchMerged(localPath, branch, base string) (bool, error) {
 // RemoteBranchExists checks whether a branch exists on the given remote.
 // This shells out to ls-remote, so it performs a network round trip.
 func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
-	cmd := exec.Command("git", "ls-remote", "--heads", remoteName)
+	target := "refs/heads/" + branch
+	cmd := exec.Command("git", "ls-remote", "--heads", "--", remoteName, target)
 	cmd.Dir = localPath
 	output, err := cmd.Output()
 	if err != nil {
 		return false, fmt.Errorf("git ls-remote failed: %w", err)
 	}
-	target := fmt.Sprintf("refs/heads/%s", branch)
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.HasSuffix(strings.TrimSpace(line), target) {
+	for line := range strings.SplitSeq(string(output), "\n") {
+		if _, ref, ok := strings.Cut(line, "\t"); ok && ref == target {
 			return true, nil
 		}
 	}
