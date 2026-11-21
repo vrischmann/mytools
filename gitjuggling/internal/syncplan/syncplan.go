@@ -196,7 +196,7 @@ func worktreePruneActions(remoteRepos []*remote.RemoteRepo, local *discover.Loca
 			continue
 		}
 
-		state, err := git.ReadWorktreeState(wt.Path)
+		state, err := git.ReadWorktreeState(wt.MainPath, wt.Path)
 		if err != nil {
 			continue
 		}

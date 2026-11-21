@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"io/fs"
 	"iter"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 )
 
 // LocalRepo represents a locally discovered git repository.
@@ -128,7 +128,7 @@ func Discover(root string) (*LocalRepos, error) {
 
 		if d.IsDir() {
 			// Regular repo or the main clone of linked worktrees.
-			originURL, err := getRemoteURL(repoPath, "origin")
+			originURL, err := git.RemoteURL(repoPath, "origin")
 			if err != nil {
 				// Skip repos without an origin remote (e.g. bare init, no remotes configured)
 				return nil
@@ -139,11 +139,11 @@ func Discover(root string) (*LocalRepos, error) {
 			}
 		} else {
 			// A .git file is a linked worktree or a submodule checkout.
-			mainPath, ok := worktreeMainPath(path, repoPath)
+			mainPath, ok := worktreeMainPath(repoPath)
 			if !ok {
 				return nil // submodule or unrecognized; not a workspace repo
 			}
-			originURL, err := getRemoteURL(repoPath, "origin")
+			originURL, err := git.RemoteURL(repoPath, "origin")
 			if err != nil {
 				return nil
 			}
@@ -166,26 +166,16 @@ func Discover(root string) (*LocalRepos, error) {
 	return NewLocalRepos(repos), nil
 }
 
-// worktreeMainPath inspects the .git file at gitFilePath (whose parent
-// directory is worktreePath) and reports the path of the main clone when the
+// worktreeMainPath inspects a checkout's .git file and reports the main clone when the
 // file points at that clone's worktree metadata (<main>/.git/worktrees/<name>).
 // It returns false for anything else, notably submodule checkouts whose
 // gitdir lives under <parent>/.git/modules/.
-func worktreeMainPath(gitFilePath, worktreePath string) (string, bool) {
-	data, err := os.ReadFile(gitFilePath)
+func worktreeMainPath(worktreePath string) (string, bool) {
+	link, err := git.ReadGitfile(worktreePath)
 	if err != nil {
 		return "", false
 	}
-	content := strings.TrimSpace(string(data))
-	gitdir, ok := strings.CutPrefix(content, "gitdir:")
-	if !ok {
-		return "", false
-	}
-	gitdir = strings.TrimSpace(gitdir)
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(worktreePath, gitdir)
-	}
-	gitdir = filepath.Clean(gitdir)
+	gitdir := git.ResolvePath(worktreePath, link)
 
 	// Shape check: <main>/.git/worktrees/<name>
 	nameDir := filepath.Dir(gitdir)
@@ -197,17 +187,6 @@ func worktreeMainPath(gitFilePath, worktreePath string) (string, bool) {
 		return "", false
 	}
 	return filepath.Dir(dotGitDir), true
-}
-
-// getRemoteURL returns the URL of a git remote by running git remote get-url.
-func getRemoteURL(repoPath, remote string) (string, error) {
-	cmd := exec.Command("git", "remote", "get-url", remote)
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // NormalizeURL normalizes a git URL for comparison.

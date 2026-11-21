@@ -22,6 +22,17 @@ func CurrentBranch(localPath string) (string, error) {
 	return branch, nil
 }
 
+// RemoteURL returns the fetch URL that Git resolves for a configured remote.
+func RemoteURL(localPath, remoteName string) (string, error) {
+	cmd := exec.Command("git", "remote", "get-url", "--", remoteName)
+	cmd.Dir = localPath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("reading URL of remote %s: %w", remoteName, err)
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
+}
+
 // IsDirty reports whether the working tree at localPath has uncommitted
 // changes: staged, unstaged, or untracked files. This matches the set of
 // changes that `git stash -u` would capture, so it flags repos whose
@@ -72,17 +83,35 @@ func IsBranchMerged(localPath, branch, base string) (bool, error) {
 // RemoteBranchExists checks whether a branch exists on the given remote.
 // This shells out to ls-remote, so it performs a network round trip.
 func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
+	status, err := LookupRemoteBranch(localPath, remoteName, branch)
+	return status.Exists, err
+}
+
+// RemoteBranchStatus records the advertised branch and the tip of the
+// remote's default branch from the same ls-remote response.
+type RemoteBranchStatus struct {
+	Exists     bool
+	DefaultTip string
+}
+
+// LookupRemoteBranch checks the exact upstream ref and the remote's current HEAD.
+func LookupRemoteBranch(localPath, remoteName, branch string) (RemoteBranchStatus, error) {
 	target := "refs/heads/" + branch
-	cmd := exec.Command("git", "ls-remote", "--heads", "--", remoteName, target)
+	cmd := exec.Command("git", "ls-remote", "--", remoteName, target, "HEAD")
 	cmd.Dir = localPath
 	output, err := cmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("git ls-remote failed: %w", err)
+		return RemoteBranchStatus{}, fmt.Errorf("git ls-remote failed: %w", err)
 	}
+	var status RemoteBranchStatus
 	for line := range strings.SplitSeq(string(output), "\n") {
-		if _, ref, ok := strings.Cut(line, "\t"); ok && ref == target {
-			return true, nil
+		oid, ref, _ := strings.Cut(line, "\t")
+		switch ref {
+		case target:
+			status.Exists = true
+		case "HEAD":
+			status.DefaultTip = oid
 		}
 	}
-	return false, nil
+	return status, nil
 }

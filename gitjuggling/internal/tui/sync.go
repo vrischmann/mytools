@@ -1074,10 +1074,10 @@ func (m SyncModel) renderWorktreeConfirm() string {
 	upstream := action.Upstream.Remote + "/" + action.Upstream.Branch
 	fate := fmt.Sprintf("Branch %s tracks %s, which no longer exists.", SuccessStyle.Render(action.Branch), upstream)
 	command := fmt.Sprintf("git worktree remove %s", action.WorktreePath)
-	if action.Upstream.Remote == "" {
-		fate = fmt.Sprintf("The saved plan marks branch %s as stale.", SuccessStyle.Render(action.Branch))
-	}
-	if action.Merged {
+	if action.WorktreeID == "" {
+		fate = "Rebuild this saved plan to verify the worktree and its upstream."
+		command = ""
+	} else if action.Merged {
 		fate += "\n    The branch is merged into the remote's default branch."
 		command += fmt.Sprintf(" && git branch -d %s", action.Branch)
 	} else {

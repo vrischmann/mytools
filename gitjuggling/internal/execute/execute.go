@@ -2,12 +2,14 @@ package execute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -60,51 +62,106 @@ func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
 	return git.RemoteBranchExists(localPath, remoteName, branch)
 }
 
-// RemoveWorktreeAndBranch removes a linked worktree whose branch is gone
-// from the remote. When deleteBranch is true it also deletes the local
-// branch. Callers pass deleteBranch only when the branch was verified as
-// merged at plan time, so a branch -d failure here is a genuine error and
-// is reported as such. git also refuses to remove a dirty worktree.
-func RemoveWorktreeAndBranch(worktreePath, mainRepoPath, branch string, deleteBranch bool) ActionResult {
-	desc := filepath.Base(filepath.Dir(worktreePath)) + "/" + filepath.Base(worktreePath)
+// RemoveWorktreeAndBranch checks that the planned checkout still has the
+// same missing upstream before removing it. Git also refuses dirty or locked
+// worktrees. A saved plan from before these checks needs to be rebuilt.
+func RemoveWorktreeAndBranch(action syncplan.Action) ActionResult {
+	path := action.WorktreePath
+	result := ActionResult{Description: filepath.Base(filepath.Dir(path)) + "/" + filepath.Base(path), Path: path}
+	if action.Repo == nil || action.WorktreeID == "" || action.Upstream.Remote == "" {
+		result.Message = "rebuild the sync plan to record the worktree details"
+		return result
+	}
+	if err := verifyMainClone(action.MainRepoPath, action.Repo.CloneURL); err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	// If removal finished before the plan could be saved, retire the action.
+	// An offline checkout still has a registration and must be left pending.
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		_, err = os.Lstat(filepath.Join(action.MainRepoPath, ".git", "worktrees", action.WorktreeID))
+		if errors.Is(err, os.ErrNotExist) {
+			result.Success = true
+			result.Message = "worktree already removed"
+			return result
+		}
+	}
+	// Verify the checkout both before contacting its remote and after the
+	// network round trip, during which the user may have switched branches.
+	if err := verifyPlannedWorktree(action); err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	status, err := git.LookupRemoteBranch(path, action.Upstream.Remote, action.Upstream.Branch)
+	if err != nil {
+		result.Message = fmt.Sprintf("could not check upstream %s/%s: %v", action.Upstream.Remote, action.Upstream.Branch, err)
+		return result
+	}
+	if status.Exists {
+		result.Success = true
+		result.Message = fmt.Sprintf("skipped (upstream %s/%s exists again)", action.Upstream.Remote, action.Upstream.Branch)
+		return result
+	}
+	if err := verifyPlannedWorktree(action); err != nil {
+		result.Message = err.Error()
+		return result
+	}
 
-	removeCmd := exec.Command("git", "worktree", "remove", worktreePath)
-	removeCmd.Dir = mainRepoPath
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		result.Message = fmt.Sprintf("resolving worktree path: %v", err)
+		return result
+	}
+	removeCmd := exec.Command("git", "worktree", "remove", "--", absPath)
+	removeCmd.Dir = action.MainRepoPath
 	if output, err := removeCmd.CombinedOutput(); err != nil {
-		return ActionResult{
-			Description: desc,
-			Path:        worktreePath,
-			Success:     false,
-			Message:     fmt.Sprintf("git worktree remove failed: %s", strings.TrimSpace(string(output))),
-		}
+		result.Message = fmt.Sprintf("git worktree remove failed: %s", strings.TrimSpace(string(output)))
+		return result
 	}
 
-	if !deleteBranch {
-		return ActionResult{
-			Description: desc,
-			Path:        worktreePath,
-			Success:     true,
-			Message:     fmt.Sprintf("removed stale worktree (kept branch %s — not fully merged)", branch),
-		}
+	if !action.Merged || !git.IsAncestor(action.MainRepoPath, "refs/heads/"+action.Branch, status.DefaultTip) {
+		result.Success = true
+		result.Message = fmt.Sprintf("removed stale worktree (kept branch %s because its merge could not be confirmed)", action.Branch)
+		return result
 	}
 
-	deleteCmd := exec.Command("git", "branch", "-d", branch)
-	deleteCmd.Dir = mainRepoPath
+	deleteCmd := exec.Command("git", "branch", "-d", "--", action.Branch)
+	deleteCmd.Dir = action.MainRepoPath
 	if output, err := deleteCmd.CombinedOutput(); err != nil {
-		return ActionResult{
-			Description: desc,
-			Path:        worktreePath,
-			Success:     false,
-			Message:     fmt.Sprintf("git branch -d %s failed: %s", branch, strings.TrimSpace(string(output))),
-		}
+		result.Message = fmt.Sprintf("removed worktree, but git branch -d %s failed: %s", action.Branch, strings.TrimSpace(string(output)))
+		return result
 	}
 
-	return ActionResult{
-		Description: desc,
-		Path:        worktreePath,
-		Success:     true,
-		Message:     fmt.Sprintf("removed stale worktree and merged branch %s", branch),
+	result.Success = true
+	result.Message = fmt.Sprintf("removed stale worktree and merged branch %s", action.Branch)
+	return result
+}
+
+func verifyPlannedWorktree(action syncplan.Action) error {
+	current, err := git.ReadWorktreeState(action.MainRepoPath, action.WorktreePath)
+	if err != nil {
+		return fmt.Errorf("could not verify the planned worktree: %w", err)
 	}
+	if current != action.WorktreeState {
+		return errors.New("rebuild the sync plan because the worktree, branch, commit or upstream changed")
+	}
+	return nil
+}
+
+func verifyMainClone(path, cloneURL string) error {
+	dir, err := os.Lstat(path)
+	if err != nil || !dir.IsDir() {
+		return fmt.Errorf("expected a clone directory at %s", path)
+	}
+	dotGit, err := os.Lstat(filepath.Join(path, ".git"))
+	if err != nil || !dotGit.IsDir() {
+		return fmt.Errorf("expected a main clone at %s", path)
+	}
+	origin, err := git.RemoteURL(path, "origin")
+	if err != nil || discover.NormalizeURL(origin) != discover.NormalizeURL(cloneURL) {
+		return fmt.Errorf("could not verify the planned clone at %s", path)
+	}
+	return nil
 }
 
 // PushAndSetUpstream pushes the current branch to the remote with -u,
@@ -358,7 +415,7 @@ func executeAction(action syncplan.Action, confirmFn ConfirmFunc, githubToken st
 	case syncplan.ActionMove:
 		return executeMove(action.Repo, action.CurrentPath, action.ExpectedPath, confirmFn)
 	case syncplan.ActionPruneWorktree:
-		return RemoveWorktreeAndBranch(action.WorktreePath, action.MainRepoPath, action.Branch, action.Merged)
+		return RemoveWorktreeAndBranch(action)
 	case syncplan.ActionClone:
 		if action.Repo.Source == remote.SourceGitHub && githubTokenErr != nil {
 			return ActionResult{
