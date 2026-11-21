@@ -40,6 +40,54 @@ type Action struct {
 	Merged bool
 }
 
+// MovedPath returns the new location of a path carried along by a directory move.
+func MovedPath(path, from, to string) string {
+	if path == "" {
+		return path
+	}
+	rel, err := filepath.Rel(from, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return path
+	}
+	return filepath.Join(to, rel)
+}
+
+// Relocate updates the source paths in pending actions after a successful move.
+// ExpectedPath is the configured destination and stays independent of the move.
+func Relocate(actions []Action, from, to string) {
+	// Discovery uses the workspace's spelling of a path. Git can record the
+	// same main clone with an absolute path through its physical parent.
+	physical, _ := CanonicalLocation(from)
+	relocate := func(path string) string {
+		target := MovedPath(path, from, to)
+		if target == path && physical != "" && physical != from {
+			return MovedPath(path, physical, to)
+		}
+		return target
+	}
+	for i := range actions {
+		a := &actions[i]
+		a.CurrentPath = relocate(a.CurrentPath)
+		a.LocalPath = relocate(a.LocalPath)
+		a.MainRepoPath = relocate(a.MainRepoPath)
+		a.WorktreePath = relocate(a.WorktreePath)
+	}
+}
+
+// CanonicalLocation resolves the parent of a checkout even when the checkout
+// itself has already moved or its destination has yet to be created.
+func CanonicalLocation(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(abs)), nil
+}
+
 // BranchExistsFunc reports whether branch exists on remoteName for the
 // repository at localPath. Implementations typically shell out to
 // git ls-remote, so this performs a network round trip.

@@ -394,6 +394,9 @@ func (m *SyncModel) completeAction(result execute.ActionResult) error {
 		return nil
 	}
 	for i, action := range m.actions {
+		if result.MovedFrom != "" && (action.Type != syncplan.ActionMove || action.CurrentPath != result.MovedFrom) {
+			continue
+		}
 		path := action.LocalPath
 		if action.Type != syncplan.ActionUpdate {
 			path = action.ExpectedPath
@@ -409,6 +412,9 @@ func (m *SyncModel) completeAction(result execute.ActionResult) error {
 		}
 		m.actions = append(m.actions[:i], m.actions[i+1:]...)
 		break
+	}
+	if result.MovedFrom != "" {
+		syncplan.Relocate(m.actions, result.MovedFrom, result.Path)
 	}
 	if len(m.actions) == 0 {
 		return syncstate.Delete(m.workspace)

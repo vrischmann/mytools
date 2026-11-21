@@ -268,3 +268,29 @@ func TestBuildExecutableActionsSkipsDeclinedWorktreePrunes(t *testing.T) {
 		t.Fatalf("unexpected skipped message %q", results[0].Message)
 	}
 }
+
+func TestCompletedMoveSavesRelocatedWorktreePaths(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	oldMain, newMain := filepath.Join(root, "demo"), filepath.Join(root, "repos", "demo")
+	sibling := filepath.Join(root, "demo-topic")
+	m := SyncModel{workspace: "test", actions: []syncplan.Action{
+		{Type: syncplan.ActionMove, CurrentPath: oldMain, ExpectedPath: newMain},
+		{Type: syncplan.ActionPruneWorktree, MainRepoPath: oldMain, WorktreePath: filepath.Join(oldMain, "nested")},
+		{Type: syncplan.ActionPruneWorktree, MainRepoPath: oldMain, WorktreePath: sibling},
+	}}
+	require.NoError(t, m.completeAction(execute.ActionResult{Path: newMain, MovedFrom: oldMain, Success: true}))
+	plan, err := syncstate.Load(m.workspace)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	require.Len(t, plan.Actions, 2)
+	require.Equal(t, newMain, plan.Actions[0].MainRepoPath)
+	require.Equal(t, filepath.Join(newMain, "nested"), plan.Actions[0].WorktreePath)
+	require.Equal(t, newMain, plan.Actions[1].MainRepoPath)
+	require.Equal(t, sibling, plan.Actions[1].WorktreePath)
+	require.NoError(t, m.completeAction(execute.ActionResult{Path: plan.Actions[0].WorktreePath, Success: true}))
+	require.NoError(t, m.completeAction(execute.ActionResult{Path: sibling, Success: true}))
+	plan, err = syncstate.Load(m.workspace)
+	require.NoError(t, err)
+	require.Nil(t, plan)
+}

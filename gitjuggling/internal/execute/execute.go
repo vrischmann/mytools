@@ -7,9 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 
-	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -19,6 +20,7 @@ import (
 type ActionResult struct {
 	Description string
 	Path        string
+	MovedFrom   string // previous path of a completed move
 	Success     bool
 	Message     string
 }
@@ -144,22 +146,6 @@ func verifyPlannedWorktree(action syncplan.Action) error {
 	}
 	if current != action.WorktreeState {
 		return errors.New("rebuild the sync plan because the worktree, branch, commit or upstream changed")
-	}
-	return nil
-}
-
-func verifyMainClone(path, cloneURL string) error {
-	dir, err := os.Lstat(path)
-	if err != nil || !dir.IsDir() {
-		return fmt.Errorf("expected a clone directory at %s", path)
-	}
-	dotGit, err := os.Lstat(filepath.Join(path, ".git"))
-	if err != nil || !dotGit.IsDir() {
-		return fmt.Errorf("expected a main clone at %s", path)
-	}
-	origin, err := git.RemoteURL(path, "origin")
-	if err != nil || discover.NormalizeURL(origin) != discover.NormalizeURL(cloneURL) {
-		return fmt.Errorf("could not verify the planned clone at %s", path)
 	}
 	return nil
 }
@@ -320,43 +306,47 @@ type ConfirmFunc func(prompt string) bool
 func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool, confirmFn ConfirmFunc, concurrency int, configuredGitHubToken string) <-chan ActionResult {
 	out := make(chan ActionResult, len(actions))
 	githubToken, githubTokenErr := githubCloneToken(actions, configuredGitHubToken)
-
-	if concurrency < 1 {
-		concurrency = 1
+	pending := slices.Clone(actions)
+	run := func(action syncplan.Action) ActionResult {
+		if dryRun {
+			return dryRunAction(action)
+		}
+		return executeAction(action, confirmFn, githubToken, githubTokenErr)
 	}
 
 	go func() {
 		defer close(out)
-
-		if len(actions) == 0 {
-			return
+		// A rename changes the paths of dependent actions. Finish the moves
+		// and send their results before any worker starts using those paths.
+		for _, action := range pending {
+			if ctx.Err() != nil {
+				return
+			}
+			if action.Type == syncplan.ActionMove {
+				result := run(action)
+				if dryRun || result.MovedFrom != "" {
+					syncplan.Relocate(pending, action.CurrentPath, action.ExpectedPath)
+				}
+				out <- result
+			}
 		}
-
-		sem := make(chan struct{}, concurrency)
-
-		for _, action := range actions {
+		var workers sync.WaitGroup
+		defer workers.Wait()
+		sem := make(chan struct{}, max(1, concurrency))
+		for _, action := range pending {
+			if action.Type == syncplan.ActionMove {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
 			case sem <- struct{}{}:
 			}
 
-			go func(a syncplan.Action) {
+			workers.Go(func() {
 				defer func() { <-sem }()
-
-				var result ActionResult
-				if dryRun {
-					result = dryRunAction(a)
-				} else {
-					result = executeAction(a, confirmFn, githubToken, githubTokenErr)
-				}
-				out <- result
-			}(action)
-		}
-
-		// Wait for all goroutines to finish by filling the semaphore
-		for i := 0; i < cap(sem); i++ {
-			sem <- struct{}{}
+				out <- run(action)
+			})
 		}
 	}()
 
@@ -485,17 +475,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 		}
 	}
 
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(expectedPath), 0o755); err != nil {
-		return ActionResult{
-			Description: desc,
-			Path:        expectedPath,
-			Success:     false,
-			Message:     fmt.Sprintf("failed to create parent directory: %v", err),
-		}
-	}
-
-	if err := os.Rename(currentPath, expectedPath); err != nil {
+	if err := moveClone(currentPath, expectedPath, repo.CloneURL); err != nil {
 		return ActionResult{
 			Description: desc,
 			Path:        expectedPath,
@@ -507,6 +487,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 	return ActionResult{
 		Description: desc,
 		Path:        expectedPath,
+		MovedFrom:   currentPath,
 		Success:     true,
 		Message:     "moved",
 	}
