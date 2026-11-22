@@ -11,6 +11,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/prune"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
@@ -90,6 +91,21 @@ func TestSyncPrunesAgainstAllFetchedRepos(t *testing.T) {
 	}
 }
 
+func TestSyncReportsLoadAndPruneFailures(t *testing.T) {
+	model, _ := (SyncModel{}).Update(syncGithubReposMsg{err: errors.New("authentication failed")})
+	require.True(t, model.(SyncModel).HasFailures())
+
+	m := SyncModel{phase: syncPhasePruneList, dryRun: true, orphans: []*prune.OrphanRepo{
+		{Path: t.TempDir()}, {Path: filepath.Join(t.TempDir(), "missing")},
+	}}
+	model, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	pruned := model.(SyncModel)
+	require.True(t, pruned.HasFailures())
+	require.True(t, pruned.pruneResults[0].Success)
+	pruned.pruneResults = pruned.pruneResults[:1]
+	require.False(t, pruned.HasFailures())
+}
+
 func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
 
@@ -161,6 +177,7 @@ func TestResumeWithPruneKeepsSavedPlanWhenRefreshFails(t *testing.T) {
 	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	require.IsType(t, syncGithubReposMsg{}, loadingResult(t, cmd))
 	model, _ = model.Update(syncGithubReposMsg{err: errors.New("inventory unavailable")})
+	require.True(t, model.(SyncModel).HasFailures())
 	require.Equal(t, syncPhaseSummary, model.(SyncModel).phase)
 	saved, err := plans.Load()
 	require.NoError(t, err)

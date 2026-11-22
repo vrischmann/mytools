@@ -1436,7 +1436,9 @@ func (m SyncModel) enterPruneOrSummary() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-// HasFailures returns true if any action or prune failed.
+// HasFailures reports whether loading, execution or orphan pruning failed.
 func (m SyncModel) HasFailures() bool {
-	return len(m.failed) > 0
+	return m.loadErr != nil || len(m.failed) > 0 || slices.ContainsFunc(m.pruneResults, func(r *prune.PruneResult) bool {
+		return !r.Success
+	})
 }
