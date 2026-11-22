@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
@@ -44,14 +45,15 @@ func runSync(cmd *cobra.Command, args []string) error {
 		workspaceName = args[0]
 	}
 
-	// Load config
-	var cfg *config.Config
-	var err error
-	if syncConfigPath != "" {
-		cfg, err = config.LoadFrom(syncConfigPath)
-	} else {
-		cfg, err = config.LoadDefault()
+	defaultPath, err := config.DefaultPath()
+	if err != nil {
+		return err
 	}
+	configPath := syncConfigPath
+	if configPath == "" {
+		configPath = defaultPath
+	}
+	cfg, err := config.LoadFrom(configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -64,12 +66,16 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving workspace: %w", err)
 	}
 
-	savedPlan, err := syncstate.Load(workspaceName)
+	plans, err := syncstate.NewStore(filepath.Join(filepath.Dir(defaultPath), "plans"), workspaceName, configPath, ws.Root)
+	if err != nil {
+		return err
+	}
+	savedPlan, err := plans.Load()
 	if err != nil {
 		return err
 	}
 
-	model := tui.NewSyncModel(workspaceName, ws, syncDryRun, syncInteractive, syncPrune, syncSkipPull, syncConcurrency, savedPlan)
+	model := tui.NewSyncModel(plans, ws, syncDryRun, syncInteractive, syncPrune, syncSkipPull, syncConcurrency, savedPlan)
 
 	p := tea.NewProgram(model)
 	finalModel, err := p.Run()

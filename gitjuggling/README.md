@@ -21,6 +21,11 @@ Flags:
 - `--skip-pull` — skip `git pull` for repos already in the expected location
 - `-c, --concurrency` — concurrency limit (default: 2)
 
+Sync saves unfinished actions for each workspace name, config file and workspace
+root.
+The first run after upgrading from a name-only plan builds a fresh plan and
+preserves the old file.
+
 ### `exec` — Run a git command in all repos
 
 ```

@@ -2,6 +2,7 @@
 package syncstate
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,14 +18,55 @@ type Plan struct {
 	Actions []syncplan.Action `json:"actions"`
 }
 
-// Load reads the saved plan for workspace. A missing plan is reported as
-// (nil, nil).
-func Load(workspace string) (*Plan, error) {
-	path, err := pathFor(workspace)
+type workspaceID struct {
+	Name   string `json:"name"`
+	Config string `json:"config"`
+	Root   string `json:"root"`
+}
+
+type savedPlan struct {
+	Workspace workspaceID `json:"workspace"`
+	Plan
+}
+
+// Store owns the plan for one named workspace in one config and root.
+type Store struct {
+	workspace workspaceID
+	path      string
+}
+
+func NewStore(plansDir, name, configPath, root string) (Store, error) {
+	configPath, err := canonicalPath(configPath)
 	if err != nil {
-		return nil, err
+		return Store{}, fmt.Errorf("resolving config path: %w", err)
 	}
-	data, err := os.ReadFile(path)
+	root, err = canonicalPath(root)
+	if err != nil {
+		return Store{}, fmt.Errorf("resolving workspace root: %w", err)
+	}
+	id := workspaceID{Name: name, Config: configPath, Root: root}
+	// Old name-only plans carry no evidence of which root created them.
+	key := sha256.Sum256([]byte(name + "\x00" + configPath + "\x00" + root))
+	return Store{workspace: id, path: filepath.Join(plansDir, fmt.Sprintf("%x.json", key))}, nil
+}
+
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		return abs, nil
+	}
+	return resolved, err
+}
+
+func (s Store) WorkspaceName() string { return s.workspace.Name }
+
+// Load returns the pending actions, or nil when this workspace has no plan.
+func (s Store) Load() (*Plan, error) {
+	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -32,30 +74,30 @@ func Load(workspace string) (*Plan, error) {
 		return nil, fmt.Errorf("reading saved sync plan: %w", err)
 	}
 
-	var plan Plan
+	var plan savedPlan
 	if err := json.Unmarshal(data, &plan); err != nil {
 		return nil, fmt.Errorf("parsing saved sync plan: %w", err)
+	}
+	if plan.Workspace != s.workspace {
+		return nil, fmt.Errorf("saved sync plan %s does not match the selected workspace", s.path)
 	}
 	if len(plan.Actions) == 0 {
 		return nil, nil
 	}
-	return &plan, nil
+	return &plan.Plan, nil
 }
 
-// Save atomically writes plan for workspace.
-func Save(workspace string, plan Plan) error {
-	path, err := pathFor(workspace)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// Save atomically replaces the pending actions for this workspace.
+func (s Store) Save(plan Plan) error {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating sync plan directory: %w", err)
 	}
-	data, err := json.MarshalIndent(plan, "", "  ")
+	data, err := json.MarshalIndent(savedPlan{Workspace: s.workspace, Plan: plan}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding sync plan: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".sync-plan-*")
+	tmp, err := os.CreateTemp(dir, ".sync-plan-*")
 	if err != nil {
 		return fmt.Errorf("creating temporary sync plan: %w", err)
 	}
@@ -72,28 +114,16 @@ func Save(workspace string, plan Plan) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing sync plan: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("saving sync plan: %w", err)
 	}
 	return nil
 }
 
-// Delete removes the saved plan once every pending action has completed.
-func Delete(workspace string) error {
-	path, err := pathFor(workspace)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+// Delete removes this workspace's saved plan.
+func (s Store) Delete() error {
+	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing saved sync plan: %w", err)
 	}
 	return nil
-}
-
-func pathFor(workspace string) (string, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("determining config directory for saved sync plan: %w", err)
-	}
-	return filepath.Join(configDir, "gitjuggling", "plans", workspace+".json"), nil
 }

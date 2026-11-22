@@ -100,8 +100,8 @@ const (
 
 // SyncModel is the Bubbletea model for the sync command.
 type SyncModel struct {
-	phase     syncPhase
-	workspace string
+	phase syncPhase
+	plans syncstate.Store
 
 	// Options
 	dryRun      bool
@@ -187,7 +187,7 @@ type loadingStep struct {
 }
 
 // NewSyncModel creates a new sync TUI model.
-func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactive, doPrune, skipPull bool, concurrency int, savedPlan *syncstate.Plan) SyncModel {
+func NewSyncModel(plans syncstate.Store, ws *config.Workspace, dryRun, interactive, doPrune, skipPull bool, concurrency int, savedPlan *syncstate.Plan) SyncModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = SuccessStyle
@@ -206,7 +206,7 @@ func NewSyncModel(workspaceName string, ws *config.Workspace, dryRun, interactiv
 	}
 	return SyncModel{
 		phase:        phase,
-		workspace:    workspaceName,
+		plans:        plans,
 		dryRun:       dryRun,
 		interactive:  interactive,
 		doPrune:      doPrune,
@@ -417,9 +417,9 @@ func (m *SyncModel) completeAction(result execute.ActionResult) error {
 		syncplan.Relocate(m.actions, result.MovedFrom, result.Path)
 	}
 	if len(m.actions) == 0 {
-		return syncstate.Delete(m.workspace)
+		return m.plans.Delete()
 	}
-	return syncstate.Save(m.workspace, syncstate.Plan{Actions: m.actions})
+	return m.plans.Save(syncstate.Plan{Actions: m.actions})
 }
 
 func (m SyncModel) buildExecutableActions() []syncplan.Action {
@@ -694,9 +694,9 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.dryRun {
 			var err error
 			if len(m.actions) == 0 {
-				err = syncstate.Delete(m.workspace)
+				err = m.plans.Delete()
 			} else {
-				err = syncstate.Save(m.workspace, syncstate.Plan{Actions: m.actions})
+				err = m.plans.Save(syncstate.Plan{Actions: m.actions})
 			}
 			if err != nil {
 				m.loadErr = err
@@ -754,7 +754,7 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.buildPlanContent())
 			return m, nil
 		case "n", "N":
-			if err := syncstate.Delete(m.workspace); err != nil {
+			if err := m.plans.Delete(); err != nil {
 				m.loadErr = err
 				m.phase = syncPhaseSummary
 				return m, tea.Quit
@@ -1019,7 +1019,7 @@ func (m SyncModel) renderResume() string {
 func (m SyncModel) renderLoading() string {
 	var sb strings.Builder
 
-	wsName := m.workspace
+	wsName := m.plans.WorkspaceName()
 	if wsName == "" {
 		wsName = "default"
 	}

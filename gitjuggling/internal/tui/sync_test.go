@@ -9,12 +9,21 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncstate"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
+
+func testPlanStore(t *testing.T, root string) syncstate.Store {
+	t.Helper()
+	dir := t.TempDir()
+	plans, err := syncstate.NewStore(filepath.Join(dir, "plans"), "personal", filepath.Join(dir, "config.yaml"), root)
+	require.NoError(t, err)
+	return plans
+}
 
 func TestSyncPrunesAgainstAllFetchedRepos(t *testing.T) {
 	root := t.TempDir()
@@ -29,7 +38,7 @@ func TestSyncPrunesAgainstAllFetchedRepos(t *testing.T) {
 		{Path: filepath.Join(root, "orphan"), RemoteURLs: map[string]string{"origin": "https://forgejo.example/alice/deleted.git"}},
 	})
 
-	m := NewSyncModel("test", ws, true, true, true, true, 1, nil)
+	m := NewSyncModel(testPlanStore(t, root), ws, true, true, true, true, 1, nil)
 	defer m.cancel()
 	model, _ := m.Update(syncGithubReposMsg{repos: []*remote.RemoteRepo{github}})
 	model, _ = model.Update(syncForgejoReposMsg{repos: []*remote.RemoteRepo{forgejo, mirror}})
@@ -82,7 +91,7 @@ func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 
 func TestResumePlanUsesSavedActions(t *testing.T) {
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
-	m := NewSyncModel("personal", nil, false, true, false, false, 1, &syncstate.Plan{Actions: []syncplan.Action{{
+	m := NewSyncModel(testPlanStore(t, t.TempDir()), nil, false, true, false, false, 1, &syncstate.Plan{Actions: []syncplan.Action{{
 		Type:         syncplan.ActionClone,
 		Repo:         repo,
 		ExpectedPath: "/tmp/demo",
@@ -132,7 +141,7 @@ func TestBuildExecutableActionsSkipsPullForReposAlreadyInPlace(t *testing.T) {
 }
 
 func TestStartExecutionWithOnlySkippedMovesFinishesImmediately(t *testing.T) {
-	m := SyncModel{}
+	m := SyncModel{plans: testPlanStore(t, t.TempDir())}
 
 	model, _ := m.startExecution(nil, []execute.ActionResult{{Message: "skipped (user declined)", Success: true}})
 	finalModel, ok := model.(SyncModel)
@@ -189,13 +198,18 @@ func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	gittest.Repo(t, second, gittest.BareRemote(t))
+	gittest.Run(t, second, "push", "-u", "origin", "master")
 
 	m := SyncModel{
+		plans:       testPlanStore(t, root),
 		interactive: true,
-		localDirty:  map[string]bool{"/tmp/dirty1": true, "/tmp/dirty2": true},
+		localDirty:  map[string]bool{first: true, second: true},
 		actions: []syncplan.Action{
-			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty1"},
-			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/dirty2"},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: first},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: second},
 		},
 		ws:          &config.Workspace{},
 		ctx:         ctx,
@@ -214,12 +228,14 @@ func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
 	skipped, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m = skipped.(SyncModel)
 	require.True(t, m.skippedDirtyIndices[0])
-	require.Equal(t, []string{"/tmp/dirty2"}, updatePaths(m.buildExecutableActions()))
+	require.Equal(t, []string{second}, updatePaths(m.buildExecutableActions()))
 
 	// Confirm the second: no more dirty items, so it proceeds to execution.
 	confirmed, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = confirmed.(SyncModel)
 	require.Equal(t, syncPhaseExecuting, m.phase)
+	result := <-m.execCh
+	require.True(t, result.Success, result.Message)
 }
 
 func updatePaths(actions []syncplan.Action) []string {
@@ -270,17 +286,16 @@ func TestBuildExecutableActionsSkipsDeclinedWorktreePrunes(t *testing.T) {
 }
 
 func TestCompletedMoveSavesRelocatedWorktreePaths(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	oldMain, newMain := filepath.Join(root, "demo"), filepath.Join(root, "repos", "demo")
 	sibling := filepath.Join(root, "demo-topic")
-	m := SyncModel{workspace: "test", actions: []syncplan.Action{
+	m := SyncModel{plans: testPlanStore(t, root), actions: []syncplan.Action{
 		{Type: syncplan.ActionMove, CurrentPath: oldMain, ExpectedPath: newMain},
 		{Type: syncplan.ActionPruneWorktree, MainRepoPath: oldMain, WorktreePath: filepath.Join(oldMain, "nested")},
 		{Type: syncplan.ActionPruneWorktree, MainRepoPath: oldMain, WorktreePath: sibling},
 	}}
 	require.NoError(t, m.completeAction(execute.ActionResult{Path: newMain, MovedFrom: oldMain, Success: true}))
-	plan, err := syncstate.Load(m.workspace)
+	plan, err := m.plans.Load()
 	require.NoError(t, err)
 	require.NotNil(t, plan)
 	require.Len(t, plan.Actions, 2)
@@ -290,7 +305,7 @@ func TestCompletedMoveSavesRelocatedWorktreePaths(t *testing.T) {
 	require.Equal(t, sibling, plan.Actions[1].WorktreePath)
 	require.NoError(t, m.completeAction(execute.ActionResult{Path: plan.Actions[0].WorktreePath, Success: true}))
 	require.NoError(t, m.completeAction(execute.ActionResult{Path: sibling, Success: true}))
-	plan, err = syncstate.Load(m.workspace)
+	plan, err = m.plans.Load()
 	require.NoError(t, err)
 	require.Nil(t, plan)
 }

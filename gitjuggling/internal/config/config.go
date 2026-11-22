@@ -213,16 +213,14 @@ func LoadFrom(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// LoadDefault loads config from the default path using os.UserConfigDir.
-// The default config file is <UserConfigDir>/gitjuggling/config.yaml.
-func LoadDefault() (*Config, error) {
+// DefaultPath returns the standard location of gitjuggling's configuration.
+func DefaultPath() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to determine config directory: %w", err)
+		return "", fmt.Errorf("failed to determine config directory: %w", err)
 	}
 
-	path := filepath.Join(configDir, "gitjuggling", "config.yaml")
-	return LoadFrom(path)
+	return filepath.Join(configDir, "gitjuggling", "config.yaml"), nil
 }
 
 // GetWorkspace resolves a workspace by name. If name is empty, it falls back
