@@ -88,3 +88,19 @@ func TestLegacyPlanWithUnknownRootIsPreserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, legacy, data)
 }
+
+func TestLoadRebuildsPlansWithAmbiguousPaths(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, "work", filepath.Join(dir, "config"), dir)
+	require.NoError(t, err)
+	dest := filepath.Join(dir, "alice-foo")
+	for _, actions := range [][]syncplan.Action{
+		{{Type: syncplan.ActionMove, ExpectedPath: dest}, {Type: syncplan.ActionClone, ExpectedPath: dest}},
+	} {
+		require.NoError(t, store.Save(Plan{Actions: actions}))
+		pending, err := store.Load()
+		require.NoError(t, err)
+		require.Nil(t, pending)
+		require.FileExists(t, store.path)
+	}
+}

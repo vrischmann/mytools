@@ -3,6 +3,7 @@ package syncplan
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
@@ -241,6 +242,38 @@ func TestBuildPlanClash(t *testing.T) {
 		}
 		if a.ExpectedPath != expected1 && a.ExpectedPath != expected2 {
 			t.Errorf("unexpected ExpectedPath %q", a.ExpectedPath)
+		}
+	}
+}
+
+func TestBuildPlanKeepsFinalDestinationsUniqueAcrossInventoryOrders(t *testing.T) {
+	ws := testWorkspace()
+	repos := []*remote.RemoteRepo{
+		makeRepo("foo", "alice", false, false), makeRepo("foo", "bob", false, false),
+		makeRepo("alice-foo", "bob", false, false), makeRepo("alice-foo-2", "bob", false, false),
+	}
+	want := map[string]string{"alice/foo": "alice-foo-3", "bob/foo": "bob-foo", "bob/alice-foo": "alice-foo", "bob/alice-foo-2": "alice-foo-2"}
+	for range 2 {
+		actions := BuildPlan(repos, discover.NewLocalRepos(nil), ws, nil)
+		require.Len(t, actions, len(repos))
+		for _, a := range actions {
+			require.Equal(t, filepath.Join(ws.Rules.Base, want[a.Repo.Owner+"/"+a.Repo.Name]), a.ExpectedPath)
+		}
+		slices.Reverse(repos)
+	}
+}
+
+func TestTiedPatternDestinationsForOneOwnerAreStable(t *testing.T) {
+	ws := testWorkspace()
+	ws.Rules.Patterns = []config.PatternRule{{Pattern: "^(?:work-)?(foo)$", To: filepath.Join(ws.Root, "$1")}}
+	first, second := makeRepo("foo", "alice", false, false), makeRepo("work-foo", "alice", false, false)
+	for _, inventory := range [][]*remote.RemoteRepo{{first, second}, {second, first}} {
+		for _, a := range BuildPlan(inventory, discover.NewLocalRepos(nil), ws, nil) {
+			want := "alice-foo"
+			if a.Repo == second {
+				want += "-2"
+			}
+			require.Equal(t, filepath.Join(ws.Root, want), a.ExpectedPath)
 		}
 	}
 }

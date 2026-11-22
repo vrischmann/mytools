@@ -1,8 +1,11 @@
 package syncplan
 
 import (
+	"cmp"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
@@ -112,8 +115,11 @@ func ClassifyRepo(repo *remote.RemoteRepo, ws *config.Workspace, clash bool) str
 	}
 	// Disambiguate colliding repos by prefixing the owner onto the final
 	// path component.
-	dir, name := filepath.Split(path)
-	return filepath.Join(dir, repo.Owner+"-"+name)
+	return withOwner(path, repo.Owner)
+}
+
+func withOwner(path, owner string) string {
+	return filepath.Join(filepath.Dir(path), owner+"-"+filepath.Base(path))
 }
 
 // rawExpectedPath returns the target directory for a repo before clash
@@ -126,6 +132,50 @@ func rawExpectedPath(repo *remote.RemoteRepo, ws *config.Workspace) string {
 		return dir
 	}
 	return filepath.Join(rulesBaseDir(repo, ws), repo.Name)
+}
+
+// Reserve the natural destinations first, then allocate owner-prefixed
+// names. If those also collide, use the next free numbered suffix.
+func destinationPaths(repos []*remote.RemoteRepo, ws *config.Workspace) []string {
+	paths := make([]string, len(repos))
+	counts := make(map[string]int)
+	for i, repo := range repos {
+		paths[i] = ClassifyRepo(repo, ws, false)
+		counts[paths[i]]++
+	}
+
+	claims := make(map[string][]int)
+	var collisions []int
+	for i, path := range paths {
+		if counts[path] == 1 {
+			claims[path] = []int{i}
+		} else {
+			collisions = append(collisions, i)
+		}
+	}
+	// Resolve ties consistently across different inventory orders.
+	slices.SortFunc(collisions, func(i, j int) int {
+		a, b := repos[i], repos[j]
+		return cmp.Or(cmp.Compare(a.Owner, b.Owner), cmp.Compare(a.Name, b.Name), cmp.Compare(a.CloneURL, b.CloneURL))
+	})
+	for _, i := range collisions {
+		paths[i] = withOwner(paths[i], repos[i].Owner)
+		claims[paths[i]] = append(claims[paths[i]], i)
+	}
+	for path, indices := range claims {
+		suffix := 2
+		for _, i := range indices[1:] {
+			for {
+				candidate := path + "-" + strconv.Itoa(suffix)
+				suffix++
+				if _, reserved := claims[candidate]; !reserved {
+					paths[i] = candidate
+					break
+				}
+			}
+		}
+	}
+	return paths
 }
 
 // matchPattern evaluates the workspace pattern rules in order against name
@@ -173,17 +223,10 @@ func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws 
 	}
 	remoteRepos = filtered
 
-	// Detect collisions: repos that map to the same target directory.
-	pathCount := make(map[string]int)
-	for _, repo := range remoteRepos {
-		pathCount[rawExpectedPath(repo, ws)]++
-	}
-
 	var actions []Action
-
-	for _, repo := range remoteRepos {
-		clash := pathCount[rawExpectedPath(repo, ws)] > 1
-		expectedPath := ClassifyRepo(repo, ws, clash)
+	paths := destinationPaths(remoteRepos, ws)
+	for i, repo := range remoteRepos {
+		expectedPath := paths[i]
 
 		localPath, found := local.FindByURL(repo.CloneURL, expectedPath)
 		switch {

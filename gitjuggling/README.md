@@ -26,8 +26,8 @@ root. Resuming rechecks local changes before an interactive pull. With `--prune`
 it also refreshes both remote inventories and scans the workspace for orphans.
 Sync also saves branch cleanup before attempting it. If Git refuses to delete
 a branch after removing its worktree, the next sync can retry that step.
-The first run after upgrading from a name-only plan builds a fresh plan and
-preserves the old file.
+On upgrade, sync builds a fresh plan for older name-only plans and for plans
+with duplicate destinations. It preserves the name-only file.
 
 ### `exec` — Run a git command in all repos
 
@@ -52,14 +52,16 @@ Routing is decided per repo, in this priority order:
 1. **Pattern rules** (`rules.patterns`) — the first regex matching the repo
    name wins. The `to` template is the repo's **full final path** and must
    reference at least one capture (`$1`, `${name}`, or `$0` for the whole
-   match), so distinct repos never collapse onto one directory. Example:
+   match). For example,
    `^workspace-(.+)$` with `to: workspaces/$1` sends `workspace-foo` to
    `workspaces/foo`.
 2. **Category rules** — `forks` for forks, then `archived` for archived
    repos, then `base` for everything else.
 
-If two repos would land on the same path, the owner is prefixed to the final
-   directory component to disambiguate (e.g. `owner-foo`).
+If two repos would land on the same path, sync prefixes the final directory
+name with the owner (for example, `owner-foo`). If that name is also taken,
+sync adds the first available suffix starting at `-2`. A repo with a unique
+configured destination keeps that path.
 
 Config file location: `<UserConfigDir>/gitjuggling/config.yaml`
 

@@ -63,8 +63,7 @@ type PatternRule struct {
 
 // Validate checks the pattern rules for correctness:
 //   - every pattern compiles as a regex,
-//   - every To template references at least one capture, so that distinct
-//     repos never collapse onto a single directory,
+//   - every To template references at least one capture,
 //   - every reference in To resolves to an existing group of the pattern.
 func (r *Rules) Validate() error {
 	for i := range r.Patterns {

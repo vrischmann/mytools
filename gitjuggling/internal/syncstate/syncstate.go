@@ -84,6 +84,17 @@ func (s Store) Load() (*Plan, error) {
 	if len(plan.Actions) == 0 {
 		return nil, nil
 	}
+	// An older plan can assign the same destination to two repositories.
+	destinations := make(map[string]bool)
+	for _, a := range plan.Actions {
+		if a.ExpectedPath != "" {
+			path := filepath.Clean(a.ExpectedPath)
+			if destinations[path] {
+				return nil, nil
+			}
+			destinations[path] = true
+		}
+	}
 	return &plan.Plan, nil
 }
 
