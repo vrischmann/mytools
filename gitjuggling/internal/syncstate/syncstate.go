@@ -84,9 +84,15 @@ func (s Store) Load() (*Plan, error) {
 	if len(plan.Actions) == 0 {
 		return nil, nil
 	}
-	// An older plan can assign the same destination to two repositories.
+	// Older planners could save CWD-relative paths or give two repositories
+	// the same destination. Let sync build a new plan for those checkouts.
 	destinations := make(map[string]bool)
 	for _, a := range plan.Actions {
+		for _, path := range []string{a.LocalPath, a.CurrentPath, a.ExpectedPath, a.MainRepoPath, a.WorktreePath} {
+			if path != "" && !filepath.IsAbs(path) {
+				return nil, nil
+			}
+		}
 		if a.ExpectedPath != "" {
 			path := filepath.Clean(a.ExpectedPath)
 			if destinations[path] {

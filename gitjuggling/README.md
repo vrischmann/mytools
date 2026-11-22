@@ -27,7 +27,7 @@ it also refreshes both remote inventories and scans the workspace for orphans.
 Sync also saves branch cleanup before attempting it. If Git refuses to delete
 a branch after removing its worktree, the next sync can retry that step.
 On upgrade, sync builds a fresh plan for older name-only plans and for plans
-with duplicate destinations. It preserves the name-only file.
+with relative paths or duplicate destinations. It preserves the name-only file.
 
 ### `exec` — Run a git command in all repos
 
@@ -47,14 +47,15 @@ GitHub HTTPS clones and pulls use `github_token` when set, with
 `gh auth token --hostname github.com` as a fallback. SSH and other hosts use
 Git's usual authentication.
 
-Routing is decided per repo, in this priority order:
+Relative destinations in patterns and category rules start at the workspace
+root. Sync applies the rules in this order.
 
 1. **Pattern rules** (`rules.patterns`) — the first regex matching the repo
    name wins. The `to` template is the repo's **full final path** and must
    reference at least one capture (`$1`, `${name}`, or `$0` for the whole
    match). For example,
    `^workspace-(.+)$` with `to: workspaces/$1` sends `workspace-foo` to
-   `workspaces/foo`.
+   `<workspace root>/workspaces/foo`.
 2. **Category rules** — `forks` for forks, then `archived` for archived
    repos, then `base` for everything else.
 

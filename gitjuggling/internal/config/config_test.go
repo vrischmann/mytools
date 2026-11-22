@@ -38,6 +38,15 @@ workspace:
 	require.Empty(t, ws.Rules.Archived)
 }
 
+func TestLoadMakesRelativeWorkspaceRootsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	require.NoError(t, os.WriteFile("config.yaml", []byte("workspace:\n  personal:\n    root: checkouts\n"), 0o600))
+	cfg, err := LoadFrom("config.yaml")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "checkouts"), cfg.Workspaces["personal"].Root)
+}
+
 func TestParseFullConfig(t *testing.T) {
 	input := `
 default_workspace: personal

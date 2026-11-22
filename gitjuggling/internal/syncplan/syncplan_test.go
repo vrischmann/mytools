@@ -263,9 +263,35 @@ func TestBuildPlanKeepsFinalDestinationsUniqueAcrossInventoryOrders(t *testing.T
 	}
 }
 
+func TestRelativeRoutesUseTheWorkspaceRoot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	root := t.TempDir()
+	ws := &config.Workspace{Root: root, Rules: config.Rules{Base: "repos", Forks: "forks", Archived: "archived",
+		Patterns: []config.PatternRule{{Pattern: "^workspace-(.+)$", To: "workspaces/$1"}}}}
+	for _, tc := range []struct {
+		repo *remote.RemoteRepo
+		want string
+	}{
+		{makeRepo("example", "me", false, false), "repos/example"},
+		{makeRepo("fork", "me", true, false), "forks/fork"},
+		{makeRepo("archive", "me", false, true), "archived/archive"},
+		{makeRepo("workspace-foo", "me", false, false), "workspaces/foo"},
+	} {
+		require.Equal(t, filepath.Join(root, tc.want), ClassifyRepo(tc.repo, ws, false))
+	}
+	repo := makeRepo("workspace-foo", "me", false, false)
+	gittest.Repo(t, filepath.Join(root, "workspaces", "foo"), repo.CloneURL)
+	local, err := discover.Discover(root)
+	require.NoError(t, err)
+	actions := BuildPlan([]*remote.RemoteRepo{repo}, local, ws, nil)
+	require.Len(t, actions, 1)
+	require.Equal(t, ActionUpdate, actions[0].Type)
+	require.True(t, actions[0].AlreadyInPlace)
+}
+
 func TestTiedPatternDestinationsForOneOwnerAreStable(t *testing.T) {
 	ws := testWorkspace()
-	ws.Rules.Patterns = []config.PatternRule{{Pattern: "^(?:work-)?(foo)$", To: filepath.Join(ws.Root, "$1")}}
+	ws.Rules.Patterns = []config.PatternRule{{Pattern: "^(?:work-)?(foo)$", To: "$1"}}
 	first, second := makeRepo("foo", "alice", false, false), makeRepo("work-foo", "alice", false, false)
 	for _, inventory := range [][]*remote.RemoteRepo{{first, second}, {second, first}} {
 		for _, a := range BuildPlan(inventory, discover.NewLocalRepos(nil), ws, nil) {

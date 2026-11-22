@@ -128,10 +128,14 @@ func withOwner(path, owner string) string {
 // no pattern matches the repo is placed under its category base directory
 // using its name.
 func rawExpectedPath(repo *remote.RemoteRepo, ws *config.Workspace) string {
-	if dir, ok := matchPattern(ws, repo.Name); ok {
-		return dir
+	path, ok := matchPattern(ws, repo.Name)
+	if !ok {
+		path = filepath.Join(rulesBaseDir(repo, ws), repo.Name)
 	}
-	return filepath.Join(rulesBaseDir(repo, ws), repo.Name)
+	if !filepath.IsAbs(path) {
+		return filepath.Join(ws.Root, path)
+	}
+	return filepath.Clean(path)
 }
 
 // Reserve the natural destinations first, then allocate owner-prefixed

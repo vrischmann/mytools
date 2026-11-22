@@ -95,6 +95,8 @@ func TestLoadRebuildsPlansWithAmbiguousPaths(t *testing.T) {
 	require.NoError(t, err)
 	dest := filepath.Join(dir, "alice-foo")
 	for _, actions := range [][]syncplan.Action{
+		{{Type: syncplan.ActionClone, ExpectedPath: "relative/repo"}},
+		{{Type: syncplan.ActionMove, CurrentPath: "relative/old", ExpectedPath: dest}},
 		{{Type: syncplan.ActionMove, ExpectedPath: dest}, {Type: syncplan.ActionClone, ExpectedPath: dest}},
 	} {
 		require.NoError(t, store.Save(Plan{Actions: actions}))

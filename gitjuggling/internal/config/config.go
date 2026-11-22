@@ -204,6 +204,12 @@ func LoadFrom(path string) (*Config, error) {
 		if ws == nil {
 			continue
 		}
+		if ws.Root != "" && !filepath.IsAbs(ws.Root) {
+			ws.Root, err = filepath.Abs(ws.Root)
+			if err != nil {
+				return nil, fmt.Errorf("resolving root for workspace %q: %w", name, err)
+			}
+		}
 		if err := ws.Rules.Validate(); err != nil {
 			return nil, fmt.Errorf("workspace %q: %w", name, err)
 		}
