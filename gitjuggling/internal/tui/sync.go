@@ -33,10 +33,12 @@ type syncForgejoReposMsg struct {
 }
 
 type syncLocalReposMsg struct {
-	local *discover.LocalRepos
-	dirty map[string]bool
-	err   error
+	local   *discover.LocalRepos
+	actions []syncplan.Action
+	err     error
 }
+
+type syncDirtyReposMsg map[string]bool
 
 type syncActionResultMsg struct {
 	result execute.ActionResult
@@ -259,16 +261,13 @@ func (m SyncModel) scanLocalRepos() tea.Cmd {
 		if err != nil {
 			return syncLocalReposMsg{err: err}
 		}
-		// Detect repos with uncommitted changes so the user can be prompted
-		// before an update would stash them. This runs as part of the existing
-		// async scan, so it never blocks the UI.
-		dirty := make(map[string]bool)
-		for _, repo := range local.Iter() {
-			if d, derr := execute.IsDirty(repo.Path); derr == nil {
-				dirty[repo.Path] = d
-			}
+		if m.savedPlan != nil {
+			return syncLocalReposMsg{local: local, actions: m.savedPlan.Actions}
 		}
-		return syncLocalReposMsg{local: local, dirty: dirty}
+		// Keep the full remote inventory for orphan detection.
+		github, forgejo := remote.DedupRepos(m.githubRepos, m.forgejoRepos)
+		actions := syncplan.BuildPlan(slices.Concat(github, forgejo), local, m.ws, execute.RemoteBranchExists)
+		return syncLocalReposMsg{local: local, actions: actions}
 	}
 }
 
@@ -290,14 +289,26 @@ func (m SyncModel) enterFromPlan() (tea.Model, tea.Cmd) {
 	if m.dryRun || !m.interactive {
 		return m.startExecution(m.buildExecutableActions(), m.buildInitialResults())
 	}
-	if dirty := m.dirtyUpdateIndices(); len(dirty) > 0 {
-		m.phase = syncPhaseDirtyConfirm
-		m.dirtyConfirmIndices = dirty
-		m.dirtyConfirmCursor = 0
-		m.skippedDirtyIndices = make(map[int]bool)
-		return m, nil
+	if m.updates == 0 {
+		return m.enterMoveOrExecute()
 	}
-	return m.enterMoveOrExecute()
+	// Check the pending checkouts when execution is requested. A user may
+	// have edited them after saving the plan or while the plan was on screen.
+	m.phase = syncPhaseLoading
+	m.loadingIdx = 0
+	m.loadingSteps = []loadingStep{{label: "Checking for uncommitted changes..."}}
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+		dirty := make(syncDirtyReposMsg)
+		for _, a := range m.actions {
+			if a.Type != syncplan.ActionUpdate || (m.skipPull && a.AlreadyInPlace) {
+				continue
+			}
+			if d, err := execute.IsDirty(a.LocalPath); err == nil {
+				dirty[a.LocalPath] = d
+			}
+		}
+		return dirty
+	})
 }
 
 // enterMoveOrExecute enters the move-confirmation phase when there are moves
@@ -364,6 +375,7 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 }
 
 func (m *SyncModel) setPlan(actions []syncplan.Action) {
+	m.phase = syncPhasePlan
 	m.actions = actions
 	m.updates = 0
 	m.skippedPulls = 0
@@ -386,6 +398,7 @@ func (m *SyncModel) setPlan(actions []syncplan.Action) {
 			m.worktreePrunes++
 		}
 	}
+	m.viewport.SetContent(m.buildPlanContent())
 }
 
 // completeAction removes a successful action from the durable plan.
@@ -524,7 +537,7 @@ func (m SyncModel) buildSkippedDirtyResults() []execute.ActionResult {
 			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
 			Path:        action.LocalPath,
 			Success:     true,
-			Message:     "skipped (uncommitted changes — user declined)",
+			Message:     "skipped (user declined to stash uncommitted changes)",
 		})
 	}
 	return results
@@ -542,7 +555,7 @@ func (m SyncModel) buildInitialResults() []execute.ActionResult {
 }
 
 // dirtyUpdateIndices returns the indices of update actions that will run and
-// whose local working tree has uncommitted changes.
+// whose working tree is dirty or could not be checked.
 func (m SyncModel) dirtyUpdateIndices() []int {
 	var indices []int
 	for i, action := range m.actions {
@@ -553,7 +566,7 @@ func (m SyncModel) dirtyUpdateIndices() []int {
 		if m.skipPull && action.AlreadyInPlace {
 			continue
 		}
-		if m.localDirty[action.LocalPath] {
+		if dirty, known := m.localDirty[action.LocalPath]; dirty || !known {
 			indices = append(indices, i)
 		}
 	}
@@ -684,14 +697,9 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.localRepos = msg.local
-		m.localDirty = msg.dirty
-		m.loadingSteps[2].done = true
-
-		// Keep the complete fetched inventory for orphan detection.
-		githubRepos, forgejoRepos := remote.DedupRepos(m.githubRepos, m.forgejoRepos)
-		reposToSync := slices.Concat(githubRepos, forgejoRepos)
-		m.setPlan(syncplan.BuildPlan(reposToSync, m.localRepos, m.ws, execute.RemoteBranchExists))
-		if !m.dryRun {
+		m.loadingSteps[len(m.loadingSteps)-1].done = true
+		m.setPlan(msg.actions)
+		if m.savedPlan == nil && !m.dryRun {
 			var err error
 			if len(m.actions) == 0 {
 				err = m.plans.Delete()
@@ -704,9 +712,19 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
+		m.savedPlan = nil
+		return m, nil
 
-		m.phase = syncPhasePlan
-		m.viewport.SetContent(m.buildPlanContent())
+	case syncDirtyReposMsg:
+		m.localDirty = msg
+		m.skippedDirtyIndices = nil
+		m.dirtyConfirmIndices = m.dirtyUpdateIndices()
+		if len(m.dirtyConfirmIndices) == 0 {
+			return m.enterMoveOrExecute()
+		}
+		m.phase = syncPhaseDirtyConfirm
+		m.dirtyConfirmCursor = 0
+		m.skippedDirtyIndices = make(map[int]bool)
 		return m, nil
 
 	// Execution phase messages
@@ -749,9 +767,12 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case syncPhaseResume:
 		switch msg.String() {
 		case "y", "Y", "enter":
+			if m.doPrune {
+				m.phase = syncPhaseLoading
+				return m, m.Init()
+			}
 			m.setPlan(m.savedPlan.Actions)
-			m.phase = syncPhasePlan
-			m.viewport.SetContent(m.buildPlanContent())
+			m.savedPlan = nil
 			return m, nil
 		case "n", "N":
 			if err := m.plans.Delete(); err != nil {
@@ -1111,13 +1132,18 @@ func (m SyncModel) renderDirtyConfirm() string {
 	action := m.actions[m.dirtyConfirmIndices[m.dirtyConfirmCursor]]
 	current := m.dirtyConfirmCursor + 1
 	total := len(m.dirtyConfirmIndices)
+	status := "has uncommitted changes"
+	if _, known := m.localDirty[action.LocalPath]; !known {
+		status = "could not be checked for uncommitted changes"
+	}
 
 	return fmt.Sprintf(
-		"%s\n\n  %s/%s (%s) has uncommitted changes.\n\n    %s\n\n  Updating stashes them first (recoverable via %s).\n\n  %s\n",
+		"%s\n\n  %s/%s (%s) %s.\n\n    %s\n\n  Updating stashes local changes first (recoverable via %s).\n\n  %s\n",
 		SectionHeader(fmt.Sprintf("Dirty repo %d/%d", current, total)),
 		action.Repo.Owner,
 		action.Repo.Name,
 		action.Repo.SourceLabel(),
+		status,
 		DimStyle.Render(action.LocalPath),
 		DimStyle.Render("git stash pop"),
 		DimStyle.Render("[y] Stash & update  [n] Skip  [a] Stash all remaining  [q] Cancel"),

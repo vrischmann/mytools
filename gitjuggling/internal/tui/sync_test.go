@@ -2,11 +2,12 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
-	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
@@ -25,33 +26,68 @@ func testPlanStore(t *testing.T, root string) syncstate.Store {
 	return plans
 }
 
+// Run the loading command from a Bubble Tea batch, ignoring its spinner tick.
+func loadingResult(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	require.NotNil(t, cmd)
+	batch := cmd().(tea.BatchMsg)
+	for _, run := range batch {
+		switch msg := run().(type) {
+		case syncGithubReposMsg, syncForgejoReposMsg, syncLocalReposMsg, syncDirtyReposMsg:
+			return msg
+		}
+	}
+	t.Fatal("missing loading command")
+	return nil
+}
+
 func TestSyncPrunesAgainstAllFetchedRepos(t *testing.T) {
 	root := t.TempDir()
 	ws := &config.Workspace{Root: root, Rules: config.Rules{Base: root}}
 	github := &remote.RemoteRepo{Owner: "alice", Name: "tool", Source: remote.SourceGitHub, CloneURL: "https://github.com/alice/tool.git"}
 	forgejo := &remote.RemoteRepo{Owner: "alice", Name: "tool", Source: remote.SourceForgejo, CloneURL: "git@forgejo.example:alice/tool.git"}
 	mirror := &remote.RemoteRepo{Owner: "alice", Name: "mirror", Source: remote.SourceForgejo, IsMirror: true, CloneURL: "git@forgejo.example:alice/mirror.git"}
-	local := discover.NewLocalRepos([]discover.LocalRepo{
-		{Path: filepath.Join(root, "tool"), RemoteURLs: map[string]string{"origin": github.CloneURL}},
-		{Path: filepath.Join(root, "forgejo-tool"), RemoteURLs: map[string]string{"origin": "https://forgejo.example/alice/tool.git"}},
-		{Path: filepath.Join(root, "mirror"), RemoteURLs: map[string]string{"origin": mirror.CloneURL}},
-		{Path: filepath.Join(root, "orphan"), RemoteURLs: map[string]string{"origin": "https://forgejo.example/alice/deleted.git"}},
-	})
+	gittest.Repo(t, filepath.Join(root, "tool"), github.CloneURL)
+	gittest.Repo(t, filepath.Join(root, "forgejo-tool"), "https://forgejo.example/alice/tool.git")
+	gittest.Repo(t, filepath.Join(root, "mirror"), mirror.CloneURL)
+	gittest.Repo(t, filepath.Join(root, "orphan"), "https://forgejo.example/alice/deleted.git")
 
-	m := NewSyncModel(testPlanStore(t, root), ws, true, true, true, true, 1, nil)
-	defer m.cancel()
-	model, _ := m.Update(syncGithubReposMsg{repos: []*remote.RemoteRepo{github}})
-	model, _ = model.Update(syncForgejoReposMsg{repos: []*remote.RemoteRepo{forgejo, mirror}})
-	model, _ = model.Update(syncLocalReposMsg{local: local})
-	planned := model.(SyncModel)
-	require.Len(t, planned.actions, 1)
-	require.Same(t, github, planned.actions[0].Repo)
-
-	model, _ = planned.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	pruning := model.(SyncModel)
-	require.Equal(t, syncPhasePruneList, pruning.phase)
-	require.Len(t, pruning.orphans, 1)
-	require.Equal(t, filepath.Join(root, "orphan"), pruning.orphans[0].Path)
+	saved := &syncstate.Plan{Actions: []syncplan.Action{{
+		Type: syncplan.ActionUpdate, Repo: mirror, LocalPath: filepath.Join(root, "mirror"), AlreadyInPlace: true,
+	}}}
+	for _, tc := range []struct {
+		name string
+		plan *syncstate.Plan
+	}{{"fresh", nil}, {"resumed", saved}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewSyncModel(testPlanStore(t, root), ws, true, true, true, true, 1, tc.plan)
+			defer m.cancel()
+			var model tea.Model = m
+			cmd := m.Init()
+			if tc.plan != nil {
+				model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			}
+			githubMsg := loadingResult(t, cmd).(syncGithubReposMsg)
+			githubMsg.repos = []*remote.RemoteRepo{github}
+			model, cmd = model.Update(githubMsg)
+			forgejoMsg := loadingResult(t, cmd).(syncForgejoReposMsg)
+			forgejoMsg.repos = []*remote.RemoteRepo{forgejo, mirror}
+			model, cmd = model.Update(forgejoMsg)
+			model, _ = model.Update(loadingResult(t, cmd))
+			planned := model.(SyncModel)
+			require.Len(t, planned.actions, 1)
+			if tc.plan == nil {
+				require.Same(t, github, planned.actions[0].Repo)
+			} else {
+				require.Equal(t, tc.plan.Actions, planned.actions)
+			}
+			model, _ = planned.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			pruning := model.(SyncModel)
+			require.Equal(t, syncPhasePruneList, pruning.phase)
+			require.Len(t, pruning.orphans, 1)
+			require.Equal(t, filepath.Join(root, "orphan"), pruning.orphans[0].Path)
+		})
+	}
 }
 
 func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
@@ -89,19 +125,46 @@ func TestBuildExecutableActionsSkipsDeclinedMoves(t *testing.T) {
 	}
 }
 
-func TestResumePlanUsesSavedActions(t *testing.T) {
-	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
-	m := NewSyncModel(testPlanStore(t, t.TempDir()), nil, false, true, false, false, 1, &syncstate.Plan{Actions: []syncplan.Action{{
-		Type:         syncplan.ActionClone,
-		Repo:         repo,
-		ExpectedPath: "/tmp/demo",
-	}}})
-
-	model, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+func TestResumeChecksSavedUpdatesForNewChanges(t *testing.T) {
+	root := t.TempDir()
+	checkout := t.TempDir() // A configured destination can be outside the discovery root.
+	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub, CloneURL: "https://github.com/vincent/demo.git"}
+	gittest.Repo(t, checkout, repo.CloneURL)
+	plans := testPlanStore(t, root)
+	plan := syncstate.Plan{Actions: []syncplan.Action{{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: checkout}}}
+	require.NoError(t, plans.Save(plan))
+	m := NewSyncModel(plans, &config.Workspace{Root: root}, false, true, false, false, 1, &plan)
+	defer m.cancel()
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.Nil(t, cmd, "resuming without prune does not fetch the inventories")
 	resumed := model.(SyncModel)
 	require.Equal(t, syncPhasePlan, resumed.phase)
-	require.Len(t, resumed.actions, 1)
-	require.Equal(t, 1, resumed.clones)
+	require.Equal(t, plan.Actions, resumed.actions)
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, "draft"), []byte("written while viewing the saved plan"), 0o600))
+	model, cmd = resumed.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(loadingResult(t, cmd))
+	require.Equal(t, syncPhaseDirtyConfirm, model.(SyncModel).phase)
+	require.Contains(t, model.View(), checkout)
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	require.Equal(t, syncPhaseSummary, model.(SyncModel).phase)
+	require.Equal(t, "?? draft", gittest.Run(t, checkout, "status", "--porcelain"))
+	require.Empty(t, gittest.Run(t, checkout, "stash", "list"))
+}
+
+func TestResumeWithPruneKeepsSavedPlanWhenRefreshFails(t *testing.T) {
+	root := t.TempDir()
+	plans := testPlanStore(t, root)
+	plan := syncstate.Plan{Actions: []syncplan.Action{{Type: syncplan.ActionClone, ExpectedPath: filepath.Join(root, "pending")}}}
+	require.NoError(t, plans.Save(plan))
+	m := NewSyncModel(plans, &config.Workspace{Root: root}, false, true, true, false, 1, &plan)
+	defer m.cancel()
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.IsType(t, syncGithubReposMsg{}, loadingResult(t, cmd))
+	model, _ = model.Update(syncGithubReposMsg{err: errors.New("inventory unavailable")})
+	require.Equal(t, syncPhaseSummary, model.(SyncModel).phase)
+	saved, err := plans.Load()
+	require.NoError(t, err)
+	require.Equal(t, &plan, saved)
 }
 
 func TestBuildExecutableActionsSkipsPullForReposAlreadyInPlace(t *testing.T) {
@@ -188,10 +251,11 @@ func TestDirtyUpdateIndicesFlagsOnlyExecutableDirtyUpdates(t *testing.T) {
 			// Already in place with --skip-pull: would not execute, must be excluded.
 			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/skip", AlreadyInPlace: true},
 			{Type: syncplan.ActionClone, Repo: repo, ExpectedPath: "/tmp/clone"},
+			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: "/tmp/status-unavailable"},
 		},
 	}
 
-	require.Equal(t, []int{1}, m.dirtyUpdateIndices())
+	require.Equal(t, []int{1, 4}, m.dirtyUpdateIndices())
 }
 
 func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
@@ -206,7 +270,6 @@ func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
 	m := SyncModel{
 		plans:       testPlanStore(t, root),
 		interactive: true,
-		localDirty:  map[string]bool{first: true, second: true},
 		actions: []syncplan.Action{
 			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: first},
 			{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: second},
@@ -216,10 +279,10 @@ func TestDirtyConfirmKeysSkipAndProceed(t *testing.T) {
 		cancel:      cancel,
 		concurrency: 1,
 	}
-	m.phase = syncPhasePlan
+	m.setPlan(m.actions)
 
-	// Enter plan -> enters dirty confirm over both dirty updates.
-	entered, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	// Two checkouts require confirmation.
+	entered, _ := m.Update(syncDirtyReposMsg{first: true, second: true})
 	m = entered.(SyncModel)
 	require.Equal(t, syncPhaseDirtyConfirm, m.phase)
 	require.Equal(t, []int{0, 1}, m.dirtyConfirmIndices)
