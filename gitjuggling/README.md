@@ -41,6 +41,9 @@ Flags:
 ## Configuration
 
 `gitjuggling init` creates the config with owner-only permissions (`0600`).
+GitHub HTTPS clones and pulls use `github_token` when set, with
+`gh auth token --hostname github.com` as a fallback. SSH and other hosts use
+Git's usual authentication.
 
 Routing is decided per repo, in this priority order:
 

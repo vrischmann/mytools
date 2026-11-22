@@ -28,7 +28,7 @@ func GitHubToken(directToken string) (string, error) {
 		return t, nil
 	}
 
-	cmd := exec.Command("gh", "auth", "token")
+	cmd := exec.Command("gh", "auth", "token", "--hostname", "github.com")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("`gh auth token` failed: %w", err)

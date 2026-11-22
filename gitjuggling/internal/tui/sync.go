@@ -9,6 +9,7 @@ import (
 	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/discover"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/execute"
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/prune"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -113,7 +114,8 @@ type SyncModel struct {
 	concurrency int
 
 	// Config
-	ws *config.Workspace
+	ws   *config.Workspace
+	auth git.GitHubAuth
 
 	// Loading phase
 	spinner      spinner.Model
@@ -215,6 +217,7 @@ func NewSyncModel(plans syncstate.Store, ws *config.Workspace, dryRun, interacti
 		skipPull:     skipPull,
 		concurrency:  concurrency,
 		ws:           ws,
+		auth:         git.NewGitHubAuth(ws.GitHubToken),
 		spinner:      s,
 		loadingSteps: steps,
 		loadingIdx:   0,
@@ -266,7 +269,7 @@ func (m SyncModel) scanLocalRepos() tea.Cmd {
 		}
 		// Keep the full remote inventory for orphan detection.
 		github, forgejo := remote.DedupRepos(m.githubRepos, m.forgejoRepos)
-		actions := syncplan.BuildPlan(slices.Concat(github, forgejo), local, m.ws, execute.RemoteBranchExists)
+		actions := syncplan.BuildPlan(slices.Concat(github, forgejo), local, m.ws, m.auth.RemoteBranchExists)
 		return syncLocalReposMsg{local: local, actions: actions}
 	}
 }
@@ -370,7 +373,7 @@ func (m SyncModel) startExecution(actions []syncplan.Action, initialResults []ex
 		return m.finishExecution()
 	}
 
-	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency, m.ws.GitHubToken)
+	m.execCh = execute.ExecuteActions(m.ctx, actions, m.dryRun, nil, m.concurrency, m.auth)
 	return m, m.waitForActionResult()
 }
 
@@ -598,8 +601,11 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 		case isStale:
 			action = trackingFixStaleUpstream
 		default:
-			exists, err := execute.RemoteBranchExists(r.Path, "origin", b)
-			if err != nil || !exists {
+			exists, err := m.auth.RemoteBranchExists(r.Path, "origin", b)
+			if err != nil {
+				continue // keep the original failure when the remote cannot be checked
+			}
+			if !exists {
 				action = trackingFixPushUpstream
 			} else {
 				action = trackingFixSetUpstream
@@ -881,11 +887,11 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var result execute.ActionResult
 			switch item.Action {
 			case trackingFixPushUpstream:
-				result = execute.PushAndSetUpstream(item.Path, item.RemoteName, item.Branch)
+				result = execute.PushAndSetUpstream(item.Path, item.RemoteName, item.Branch, m.auth)
 			case trackingFixStaleUpstream:
-				result = execute.ResolveStaleUpstream(item.Path, item.RemoteName, item.Branch)
+				result = execute.ResolveStaleUpstream(item.Path, item.RemoteName, item.Branch, m.auth)
 			default:
-				result = execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch)
+				result = execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch, m.auth)
 			}
 			result.Description = item.Description
 			if result.Success {

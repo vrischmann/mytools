@@ -545,14 +545,15 @@ func TestWorktreePruneUsesConfiguredUpstream(t *testing.T) {
 	gittest.Run(t, wt, "push", "team", "master")
 	gittest.Run(t, wt, "remote", "set-head", "team", "master")
 	gittest.Run(t, wt, "push", "-u", "team", "HEAD:refs/heads/published/topic")
-	require.Len(t, plan(git.RemoteBranchExists), 1, "published under a different name on another remote")
+	branchExists := git.GitHubAuth{}.RemoteBranchExists
+	require.Len(t, plan(branchExists), 1, "published under a different name on another remote")
 	gittest.Run(t, team, "update-ref", "-d", "refs/heads/published/topic")
 	gittest.Run(t, wt, "fetch", "--prune", "team")
 	require.Len(t, plan(func(_, _, _ string) (bool, error) {
 		return false, errors.New("unreachable")
 	}), 1)
 
-	actions := plan(git.RemoteBranchExists)
+	actions := plan(branchExists)
 	require.Len(t, actions, 2)
 	require.Equal(t, ActionPruneWorktree, actions[1].Type)
 	require.Equal(t, "local-topic", actions[1].Branch)
@@ -560,5 +561,5 @@ func TestWorktreePruneUsesConfiguredUpstream(t *testing.T) {
 	require.True(t, actions[1].Merged)
 	gittest.Run(t, wt, "commit", "--allow-empty", "-m", "local work")
 	gittest.Run(t, mainPath, "merge", "--ff-only", "local-topic")
-	require.False(t, plan(git.RemoteBranchExists)[1].Merged, "only the local default branch contains the commit")
+	require.False(t, plan(branchExists)[1].Merged, "only the local default branch contains the commit")
 }

@@ -82,8 +82,8 @@ func IsBranchMerged(localPath, branch, base string) (bool, error) {
 
 // RemoteBranchExists checks whether a branch exists on the given remote.
 // This shells out to ls-remote, so it performs a network round trip.
-func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
-	status, err := LookupRemoteBranch(localPath, remoteName, branch)
+func (auth GitHubAuth) RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
+	status, err := auth.LookupRemoteBranch(localPath, remoteName, branch)
 	return status.Exists, err
 }
 
@@ -95,10 +95,9 @@ type RemoteBranchStatus struct {
 }
 
 // LookupRemoteBranch checks the exact upstream ref and the remote's current HEAD.
-func LookupRemoteBranch(localPath, remoteName, branch string) (RemoteBranchStatus, error) {
+func (auth GitHubAuth) LookupRemoteBranch(localPath, remoteName, branch string) (RemoteBranchStatus, error) {
 	target := "refs/heads/" + branch
-	cmd := exec.Command("git", "ls-remote", "--", remoteName, target, "HEAD")
-	cmd.Dir = localPath
+	cmd := auth.RemoteCommand(localPath, remoteName, "ls-remote", "--", remoteName, target, "HEAD")
 	output, err := cmd.Output()
 	if err != nil {
 		return RemoteBranchStatus{}, fmt.Errorf("git ls-remote failed: %w", err)

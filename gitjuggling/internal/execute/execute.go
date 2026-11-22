@@ -59,15 +59,10 @@ func IsBranchMerged(localPath, branch, base string) (bool, error) {
 	return git.IsBranchMerged(localPath, branch, base)
 }
 
-// RemoteBranchExists checks whether a branch exists on the given remote.
-func RemoteBranchExists(localPath, remoteName, branch string) (bool, error) {
-	return git.RemoteBranchExists(localPath, remoteName, branch)
-}
-
 // RemoveWorktreeAndBranch checks that the planned checkout still has the
 // same missing upstream before removing it. Git also refuses dirty or locked
 // worktrees. A saved plan from before these checks needs to be rebuilt.
-func RemoveWorktreeAndBranch(action syncplan.Action) ActionResult {
+func RemoveWorktreeAndBranch(action syncplan.Action, auth git.GitHubAuth) ActionResult {
 	path := action.WorktreePath
 	result := ActionResult{Description: filepath.Base(filepath.Dir(path)) + "/" + filepath.Base(path), Path: path}
 	if action.Repo == nil || action.WorktreeID == "" || action.Upstream.Remote == "" {
@@ -94,7 +89,7 @@ func RemoveWorktreeAndBranch(action syncplan.Action) ActionResult {
 		result.Message = err.Error()
 		return result
 	}
-	status, err := git.LookupRemoteBranch(path, action.Upstream.Remote, action.Upstream.Branch)
+	status, err := auth.LookupRemoteBranch(path, action.Upstream.Remote, action.Upstream.Branch)
 	if err != nil {
 		result.Message = fmt.Sprintf("could not check upstream %s/%s: %v", action.Upstream.Remote, action.Upstream.Branch, err)
 		return result
@@ -152,11 +147,10 @@ func verifyPlannedWorktree(action syncplan.Action) error {
 
 // PushAndSetUpstream pushes the current branch to the remote with -u,
 // creating the remote branch and setting the upstream tracking branch.
-func PushAndSetUpstream(localPath, remoteName, branch string) ActionResult {
+func PushAndSetUpstream(localPath, remoteName, branch string, auth git.GitHubAuth) ActionResult {
 	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
 
-	cmd := exec.Command("git", "push", "-u", remoteName, branch)
-	cmd.Dir = localPath
+	cmd := auth.RemoteCommand(localPath, remoteName, "push", "-u", "--", remoteName, branch)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -177,7 +171,7 @@ func PushAndSetUpstream(localPath, remoteName, branch string) ActionResult {
 // ResolveStaleUpstream handles the case where the local branch tracks a
 // remote ref that no longer exists. It checks out the default branch,
 // pulls, and deletes the stale branch if it has been merged.
-func ResolveStaleUpstream(localPath, remoteName, staleBranch string) ActionResult {
+func ResolveStaleUpstream(localPath, remoteName, staleBranch string, auth git.GitHubAuth) ActionResult {
 	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
 
 	defaultBranch, err := GetDefaultBranch(localPath, remoteName)
@@ -210,8 +204,7 @@ func ResolveStaleUpstream(localPath, remoteName, staleBranch string) ActionResul
 		}
 	}
 
-	pullCmd := exec.Command("git", "pull", "--rebase")
-	pullCmd.Dir = localPath
+	pullCmd := auth.RemoteCommand(localPath, "", "pull", "--rebase")
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -260,7 +253,7 @@ func ResolveStaleUpstream(localPath, remoteName, staleBranch string) ActionResul
 }
 
 // SetUpstreamAndPull sets the upstream tracking branch and runs git pull --rebase.
-func SetUpstreamAndPull(localPath, remoteName, branch string) ActionResult {
+func SetUpstreamAndPull(localPath, remoteName, branch string, auth git.GitHubAuth) ActionResult {
 	desc := filepath.Base(filepath.Dir(localPath)) + "/" + filepath.Base(localPath)
 
 	// git branch --set-upstream-to=origin/<branch> <branch>
@@ -277,8 +270,7 @@ func SetUpstreamAndPull(localPath, remoteName, branch string) ActionResult {
 	}
 
 	// git pull --rebase
-	pullCmd := exec.Command("git", "pull", "--rebase")
-	pullCmd.Dir = localPath
+	pullCmd := auth.RemoteCommand(localPath, "", "pull", "--rebase")
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -303,15 +295,14 @@ type ConfirmFunc func(prompt string) bool
 // ExecuteActions runs a list of actions with bounded concurrency.
 // Results are sent on the returned channel as they complete.
 // The channel is closed when all actions are done.
-func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool, confirmFn ConfirmFunc, concurrency int, configuredGitHubToken string) <-chan ActionResult {
+func ExecuteActions(ctx context.Context, actions []syncplan.Action, dryRun bool, confirmFn ConfirmFunc, concurrency int, auth git.GitHubAuth) <-chan ActionResult {
 	out := make(chan ActionResult, len(actions))
-	githubToken, githubTokenErr := githubCloneToken(actions, configuredGitHubToken)
 	pending := slices.Clone(actions)
 	run := func(action syncplan.Action) ActionResult {
 		if dryRun {
 			return dryRunAction(action)
 		}
-		return executeAction(action, confirmFn, githubToken, githubTokenErr)
+		return executeAction(action, confirmFn, auth)
 	}
 
 	go func() {
@@ -398,24 +389,16 @@ func dryRunAction(action syncplan.Action) ActionResult {
 	}
 }
 
-func executeAction(action syncplan.Action, confirmFn ConfirmFunc, githubToken string, githubTokenErr error) ActionResult {
+func executeAction(action syncplan.Action, confirmFn ConfirmFunc, auth git.GitHubAuth) ActionResult {
 	switch action.Type {
 	case syncplan.ActionUpdate:
-		return executeUpdate(action.Repo, action.LocalPath)
+		return executeUpdate(action.Repo, action.LocalPath, auth)
 	case syncplan.ActionMove:
 		return executeMove(action.Repo, action.CurrentPath, action.ExpectedPath, confirmFn)
 	case syncplan.ActionPruneWorktree:
-		return RemoveWorktreeAndBranch(action)
+		return RemoveWorktreeAndBranch(action, auth)
 	case syncplan.ActionClone:
-		if action.Repo.Source == remote.SourceGitHub && githubTokenErr != nil {
-			return ActionResult{
-				Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
-				Path:        action.ExpectedPath,
-				Success:     false,
-				Message:     fmt.Sprintf("resolving GitHub token: %v", githubTokenErr),
-			}
-		}
-		return executeClone(action.Repo, action.ExpectedPath, githubToken)
+		return executeClone(action.Repo, action.ExpectedPath, auth)
 	default:
 		return ActionResult{
 			Description: fmt.Sprintf("%s/%s (%s)", action.Repo.Owner, action.Repo.Name, action.Repo.SourceLabel()),
@@ -425,7 +408,7 @@ func executeAction(action syncplan.Action, confirmFn ConfirmFunc, githubToken st
 	}
 }
 
-func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
+func executeUpdate(repo *remote.RemoteRepo, localPath string, auth git.GitHubAuth) ActionResult {
 	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	// git stash -u
@@ -441,8 +424,7 @@ func executeUpdate(repo *remote.RemoteRepo, localPath string) ActionResult {
 	}
 
 	// git pull --rebase
-	pullCmd := exec.Command("git", "pull", "--rebase")
-	pullCmd.Dir = localPath
+	pullCmd := auth.RemoteCommand(localPath, "", "pull", "--rebase")
 	if output, err := pullCmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -493,7 +475,7 @@ func executeMove(repo *remote.RemoteRepo, currentPath, expectedPath string, conf
 	}
 }
 
-func executeClone(repo *remote.RemoteRepo, expectedPath, githubToken string) ActionResult {
+func executeClone(repo *remote.RemoteRepo, expectedPath string, auth git.GitHubAuth) ActionResult {
 	desc := fmt.Sprintf("%s/%s (%s)", repo.Owner, repo.Name, repo.SourceLabel())
 
 	// Ensure parent directory exists
@@ -506,32 +488,7 @@ func executeClone(repo *remote.RemoteRepo, expectedPath, githubToken string) Act
 		}
 	}
 
-	args := []string{"clone", repo.CloneURL, expectedPath}
-	var env []string
-	var removeAskpass func()
-	if repo.Source == remote.SourceGitHub {
-		askpassPath, cleanup, err := githubAskpass(githubToken)
-		if err != nil {
-			return ActionResult{
-				Description: desc,
-				Path:        expectedPath,
-				Success:     false,
-				Message:     fmt.Sprintf("creating GitHub authentication helper: %v", err),
-			}
-		}
-		removeAskpass = cleanup
-		defer removeAskpass()
-		env = append(os.Environ(),
-			"GIT_ASKPASS="+askpassPath,
-			"GIT_TERMINAL_PROMPT=0",
-			"GITJUGGLING_GITHUB_TOKEN="+githubToken,
-		)
-		args = append([]string{"-c", "credential.helper="}, args...)
-	}
-	cmd := exec.Command("git", args...)
-	if env != nil {
-		cmd.Env = env
-	}
+	cmd := auth.RemoteCommand("", repo.CloneURL, "clone", "--", repo.CloneURL, expectedPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return ActionResult{
 			Description: desc,
@@ -547,50 +504,4 @@ func executeClone(repo *remote.RemoteRepo, expectedPath, githubToken string) Act
 		Success:     true,
 		Message:     "cloned",
 	}
-}
-
-// githubCloneToken resolves a token only when a GitHub clone will run. This
-// preserves the existing `gh auth token` fallback while avoiding a needless
-// credential lookup for Forgejo-only plans.
-func githubCloneToken(actions []syncplan.Action, configuredToken string) (string, error) {
-	for _, action := range actions {
-		if action.Type == syncplan.ActionClone && action.Repo.Source == remote.SourceGitHub {
-			return remote.GitHubToken(configuredToken)
-		}
-	}
-	return "", nil
-}
-
-// githubAskpass returns a short-lived helper that gives Git the conventional
-// username/password pair for GitHub HTTPS token authentication. The token is
-// kept out of command arguments and clone URLs.
-func githubAskpass(token string) (string, func(), error) {
-	helper, err := os.CreateTemp("", "gitjuggling-github-askpass-*")
-	if err != nil {
-		return "", nil, err
-	}
-	path := helper.Name()
-	cleanup := func() { _ = os.Remove(path) }
-
-	const script = `#!/bin/sh
-case "$1" in
-  *Username*|*username*) printf '%s\n' x-access-token ;;
-  *Password*|*password*) printf '%s\n' "$GITJUGGLING_GITHUB_TOKEN" ;;
-  *) exit 1 ;;
-esac
-`
-	if _, err := helper.WriteString(script); err != nil {
-		helper.Close()
-		cleanup()
-		return "", nil, err
-	}
-	if err := helper.Close(); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	if err := os.Chmod(path, 0o700); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return path, cleanup, nil
 }

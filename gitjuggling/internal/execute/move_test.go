@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/git"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/gittest"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/remote"
 	"dev.rischmann.fr/mytools/gitjuggling/internal/syncplan"
@@ -75,7 +76,7 @@ func TestMoveAndPruneUseSameLocations(t *testing.T) {
 				require.NoError(t, os.MkdirAll(newMain, 0o755))
 			}
 			actions := []syncplan.Action{prune, move}
-			results := ExecuteActions(t.Context(), actions, false, func(string) bool { return decision != "decline" }, 4, "")
+			results := ExecuteActions(t.Context(), actions, false, func(string) bool { return decision != "decline" }, 4, git.GitHubAuth{})
 			relocation := <-results
 			require.Equal(t, decision != "occupied", relocation.Success, relocation.Message)
 			removal := <-results
@@ -122,7 +123,7 @@ func TestMoveRelocatesCanonicalMainPath(t *testing.T) {
 	prune.WorktreePath = filepath.Join(alias, "old", "stale")
 	move := syncplan.Action{Type: syncplan.ActionMove, Repo: prune.Repo,
 		CurrentPath: filepath.Join(alias, "old"), ExpectedPath: filepath.Join(alias, "new")}
-	results := ExecuteActions(t.Context(), []syncplan.Action{move, prune}, false, nil, 1, "")
+	results := ExecuteActions(t.Context(), []syncplan.Action{move, prune}, false, nil, 1, git.GitHubAuth{})
 	for result := range results {
 		require.True(t, result.Success, result.Message)
 	}
@@ -136,7 +137,7 @@ func TestDryRunPreviewsPruneAtMovedPath(t *testing.T) {
 	prune := planStaleWorktree(t, mainPath, filepath.Join(mainPath, "stale"), false)
 	move := syncplan.Action{Type: syncplan.ActionMove, Repo: prune.Repo,
 		CurrentPath: mainPath, ExpectedPath: filepath.Join(root, "new")}
-	results := ExecuteActions(t.Context(), []syncplan.Action{move, prune}, true, nil, 2, "")
+	results := ExecuteActions(t.Context(), []syncplan.Action{move, prune}, true, nil, 2, git.GitHubAuth{})
 	require.Contains(t, (<-results).Message, "would move")
 	require.Equal(t, filepath.Join(move.ExpectedPath, "stale"), (<-results).Path)
 	require.DirExists(t, prune.WorktreePath)
