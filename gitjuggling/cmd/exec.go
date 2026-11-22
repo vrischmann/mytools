@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -106,7 +107,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 
 func getRepositoryPaths(depth int) ([]string, error) {
 	var paths []string
-	var gm *gitmodules.GitModules
+	submodules := make(map[string]bool)
 
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -121,34 +122,36 @@ func getRepositoryPaths(depth int) ([]string, error) {
 			return nil
 		}
 
-		// Check for .gitmodules
-		gitmodulesPath := filepath.Join(path, ".gitmodules")
-		if info, err := os.Stat(gitmodulesPath); err == nil && !info.IsDir() {
-			data, err := os.ReadFile(gitmodulesPath)
-			if err == nil {
-				if parsed, err := gitmodules.Parse(string(data)); err == nil {
-					gm = parsed
-				}
-			}
-		}
-
-		// Look for .git directories
-		if !d.IsDir() || d.Name() != ".git" {
+		if !d.IsDir() {
 			return nil
 		}
-
-		// The repo path is the parent
-		repoPath := filepath.Dir(path)
-
-		// Skip submodules
-		if gm != nil {
-			parentDir := filepath.Base(repoPath)
-			if gm.Contains(parentDir) {
-				return nil
+		if d.Name() == ".git" {
+			repoPath := filepath.Dir(path)
+			if !submodules[repoPath] {
+				paths = append(paths, repoPath)
+			}
+			return fs.SkipDir
+		}
+		// Read declarations before walking the children of this checkout.
+		data, err := os.ReadFile(filepath.Join(path, ".gitmodules"))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr != nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		modules, err := gitmodules.Parse(string(data))
+		if err != nil {
+			return fmt.Errorf("reading submodules in %s: %w", path, err)
+		}
+		for _, sub := range modules.Submodules {
+			if filepath.IsLocal(sub.Path) && filepath.Clean(sub.Path) != "." {
+				submodules[filepath.Join(path, sub.Path)] = true
 			}
 		}
-
-		paths = append(paths, repoPath)
 		return nil
 	})
 
