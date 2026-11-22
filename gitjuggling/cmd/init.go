@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"dev.rischmann.fr/mytools/gitjuggling/internal/config"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -25,15 +27,11 @@ func init() {
 func runInit(cmd *cobra.Command, args []string) error {
 	path := initConfigPath
 	if path == "" {
-		configDir, err := os.UserConfigDir()
+		defaultPath, err := config.DefaultPath()
 		if err != nil {
-			return fmt.Errorf("failed to determine config directory: %w", err)
+			return err
 		}
-		path = filepath.Join(configDir, "gitjuggling", "config.yaml")
-	}
-
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("config file already exists at %s", path)
+		path = defaultPath
 	}
 
 	dir := filepath.Dir(path)
@@ -93,8 +91,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("config file already exists at %s", path)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+	_, writeErr := file.Write(data)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return fmt.Errorf("failed to write config file: %w", errors.Join(err, os.Remove(path)))
 	}
 
 	fmt.Printf("Config file created at %s\n", path)

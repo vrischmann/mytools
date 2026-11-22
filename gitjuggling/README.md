@@ -40,6 +40,8 @@ Flags:
 
 ## Configuration
 
+`gitjuggling init` creates the config with owner-only permissions (`0600`).
+
 Routing is decided per repo, in this priority order:
 
 1. **Pattern rules** (`rules.patterns`) — the first regex matching the repo
