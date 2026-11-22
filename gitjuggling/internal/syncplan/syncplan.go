@@ -183,7 +183,7 @@ func BuildPlan(remoteRepos []*remote.RemoteRepo, local *discover.LocalRepos, ws 
 		clash := pathCount[rawExpectedPath(repo, ws)] > 1
 		expectedPath := ClassifyRepo(repo, ws, clash)
 
-		localPath, found := local.FindByURL(repo.CloneURL)
+		localPath, found := local.FindByURL(repo.CloneURL, expectedPath)
 		switch {
 		case !found:
 			actions = append(actions, Action{

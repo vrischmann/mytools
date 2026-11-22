@@ -78,7 +78,7 @@ func TestDiscoverClassifiesWorktree(t *testing.T) {
 	require.NoError(err)
 
 	// The main clone must own the URL index; the worktree must not shadow it.
-	path, found := local.FindByURL("ssh://git@git.rischmann.fr/vincent/ppst.git")
+	path, found := local.FindByURL("ssh://git@git.rischmann.fr/vincent/ppst.git", "")
 	require.True(found)
 	require.Equal(mainPath, path)
 
@@ -108,7 +108,7 @@ func TestDiscoverSkipsSubmoduleCheckout(t *testing.T) {
 	local, err := Discover(root)
 	require.NoError(err)
 
-	_, found := local.FindByURL("ssh://git@git.rischmann.fr/vincent/super.git")
+	_, found := local.FindByURL("ssh://git@git.rischmann.fr/vincent/super.git", "")
 	require.True(found)
 
 	worktrees := local.Worktrees()

@@ -84,10 +84,16 @@ func (lr *LocalRepos) Worktrees() []*LocalRepo {
 	return lr.worktrees
 }
 
-// FindByURL looks up a local repo by matching against clone URLs.
-// It tries both the normalized URL and the raw URL.
-func (lr *LocalRepos) FindByURL(url string) (string, bool) {
+// FindByURL prefers a matching main clone at the planned destination.
+func (lr *LocalRepos) FindByURL(url, preferredPath string) (string, bool) {
 	normalized := NormalizeURL(url)
+	if repo, ok := lr.FindByPath(preferredPath); ok {
+		for _, candidate := range repo.RemoteURLs {
+			if NormalizeURL(candidate) == normalized {
+				return repo.Path, true
+			}
+		}
+	}
 	if p, ok := lr.byURL[normalized]; ok {
 		return p, true
 	}

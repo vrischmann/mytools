@@ -134,6 +134,21 @@ func TestBuildPlanUpdate(t *testing.T) {
 	}
 }
 
+func TestBuildPlanSelectsExpectedCloneWhenOriginIsDuplicated(t *testing.T) {
+	ws := testWorkspace()
+	repo := makeRepo("myrepo", "owner", false, false)
+	expected := filepath.Join(ws.Rules.Base, repo.Name)
+	wanted := discover.LocalRepo{Path: expected, RemoteURLs: map[string]string{"origin": "git@github.com:owner/myrepo.git"}}
+	scratch := discover.LocalRepo{Path: filepath.Join(ws.Root, "scratch"), RemoteURLs: map[string]string{"origin": repo.CloneURL}}
+	for _, repos := range [][]discover.LocalRepo{{wanted, scratch}, {scratch, wanted}} {
+		actions := BuildPlan([]*remote.RemoteRepo{repo}, discover.NewLocalRepos(repos), ws, nil)
+		require.Len(t, actions, 1)
+		require.Equal(t, ActionUpdate, actions[0].Type)
+		require.Equal(t, expected, actions[0].LocalPath)
+		require.True(t, actions[0].AlreadyInPlace)
+	}
+}
+
 func TestBuildPlanMove(t *testing.T) {
 	ws := testWorkspace()
 	repo := makeRepo("myrepo", "owner", false, false)
