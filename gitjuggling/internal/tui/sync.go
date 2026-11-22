@@ -775,10 +775,12 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.savedPlan = nil
 			return m, nil
 		case "n", "N":
-			if err := m.plans.Delete(); err != nil {
-				m.loadErr = err
-				m.phase = syncPhaseSummary
-				return m, tea.Quit
+			if !m.dryRun {
+				if err := m.plans.Delete(); err != nil {
+					m.loadErr = err
+					m.phase = syncPhaseSummary
+					return m, tea.Quit
+				}
 			}
 			m.savedPlan = nil
 			m.phase = syncPhaseLoading

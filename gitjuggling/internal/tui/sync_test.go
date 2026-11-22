@@ -184,6 +184,35 @@ func TestResumeWithPruneKeepsSavedPlanWhenRefreshFails(t *testing.T) {
 	require.Equal(t, &plan, saved)
 }
 
+func TestRebuildPreservesTheSavedPlanDuringDryRun(t *testing.T) {
+	root := t.TempDir()
+	plans := testPlanStore(t, root)
+	plan := syncstate.Plan{Actions: []syncplan.Action{{Type: syncplan.ActionClone, ExpectedPath: filepath.Join(root, "repo")}}}
+	for _, dryRun := range []bool{true, false} {
+		require.NoError(t, plans.Save(plan))
+		m := NewSyncModel(plans, &config.Workspace{Root: root}, dryRun, true, false, false, 1, &plan)
+		model, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		rebuilding := model.(SyncModel)
+		require.Equal(t, syncPhaseLoading, rebuilding.phase)
+		require.Nil(t, rebuilding.savedPlan)
+		for rebuilding.phase == syncPhaseLoading {
+			model, cmd = rebuilding.Update(loadingResult(t, cmd))
+			rebuilding = model.(SyncModel)
+		}
+		require.Equal(t, syncPhasePlan, rebuilding.phase)
+		model, _ = rebuilding.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		require.Equal(t, syncPhaseSummary, model.(SyncModel).phase)
+		onDisk, err := plans.Load()
+		require.NoError(t, err)
+		if dryRun {
+			require.Equal(t, &plan, onDisk)
+		} else {
+			require.Nil(t, onDisk)
+		}
+		m.cancel()
+	}
+}
+
 func TestBuildExecutableActionsSkipsPullForReposAlreadyInPlace(t *testing.T) {
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub}
 
