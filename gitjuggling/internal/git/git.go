@@ -38,7 +38,7 @@ func RemoteURL(localPath, remoteName string) (string, error) {
 // changes that `git stash -u` would capture, so it flags repos whose
 // uncommitted work an update would displace.
 func IsDirty(localPath string) (bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = localPath
 	output, err := cmd.Output()
 	if err != nil {

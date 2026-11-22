@@ -79,7 +79,8 @@ func TestIsDirty(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, clean)
 
-	// Untracked file: dirty.
+	// A stash includes untracked files even when normal status hides them.
+	git("config", "status.showUntrackedFiles", "no")
 	writeFile("untracked.txt", "hello")
 	dirty, err := IsDirty(dir)
 	require.NoError(t, err)

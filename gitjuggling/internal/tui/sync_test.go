@@ -146,6 +146,7 @@ func TestResumeChecksSavedUpdatesForNewChanges(t *testing.T) {
 	checkout := t.TempDir() // A configured destination can be outside the discovery root.
 	repo := &remote.RemoteRepo{Owner: "vincent", Name: "demo", Source: remote.SourceGitHub, CloneURL: "https://github.com/vincent/demo.git"}
 	gittest.Repo(t, checkout, repo.CloneURL)
+	gittest.Run(t, checkout, "config", "status.showUntrackedFiles", "no")
 	plans := testPlanStore(t, root)
 	plan := syncstate.Plan{Actions: []syncplan.Action{{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: checkout}}}
 	require.NoError(t, plans.Save(plan))
@@ -163,7 +164,7 @@ func TestResumeChecksSavedUpdatesForNewChanges(t *testing.T) {
 	require.Contains(t, model.View(), checkout)
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	require.Equal(t, syncPhaseSummary, model.(SyncModel).phase)
-	require.Equal(t, "?? draft", gittest.Run(t, checkout, "status", "--porcelain"))
+	require.Equal(t, "?? draft", gittest.Run(t, checkout, "status", "--porcelain", "--untracked-files=all"))
 	require.Empty(t, gittest.Run(t, checkout, "stash", "list"))
 }
 
