@@ -418,3 +418,46 @@ func TestCompletedMoveSavesRelocatedWorktreePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, plan)
 }
+
+func TestTrackingRepairRetiresOnlySuccessfulUpdates(t *testing.T) {
+	for _, decision := range []string{"repair", "fail", "decline"} {
+		t.Run(decision, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "repo")
+			origin := gittest.BareRemote(t)
+			gittest.Repo(t, path, origin)
+			gittest.Run(t, path, "push", "origin", "master")
+			repo := &remote.RemoteRepo{Name: "repo", CloneURL: origin}
+			actions := []syncplan.Action{
+				{Type: syncplan.ActionUpdate, Repo: repo, LocalPath: path},
+				{Type: syncplan.ActionClone, Repo: repo, ExpectedPath: filepath.Join(root, "other")},
+			}
+			plans := testPlanStore(t, root)
+			require.NoError(t, plans.Save(syncstate.Plan{Actions: actions}))
+			m := NewSyncModel(plans, &config.Workspace{Root: root}, false, true, false, false, 1, nil)
+			defer m.cancel()
+			m.setPlan(actions)
+			m.execResults = []execute.ActionResult{{Path: path, Message: "no tracking information"}}
+			model, _ := m.finishExecution()
+			require.Equal(t, syncPhaseTrackingFix, model.(SyncModel).phase)
+			if decision == "fail" {
+				require.NoError(t, os.Rename(origin, filepath.Join(root, "offline")))
+			}
+			key := 'y'
+			if decision == "decline" {
+				key = 'n'
+			}
+			model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+			require.Equal(t, decision != "repair", model.(SyncModel).HasFailures())
+			pending, err := plans.Load()
+			require.NoError(t, err)
+			require.NotNil(t, pending)
+			if decision == "repair" {
+				require.Len(t, pending.Actions, 1)
+				require.Equal(t, syncplan.ActionClone, pending.Actions[0].Type)
+			} else {
+				require.Equal(t, actions, pending.Actions)
+			}
+		})
+	}
+}

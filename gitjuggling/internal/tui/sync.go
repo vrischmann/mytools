@@ -71,11 +71,6 @@ type trackingFixItem struct {
 	Action      trackingFixAction
 }
 
-type trackingFixResultMsg struct {
-	result execute.ActionResult
-	index  int
-}
-
 // ---------------------------------------------------------------------------
 // Phases
 // ---------------------------------------------------------------------------
@@ -166,9 +161,8 @@ type SyncModel struct {
 	failed    []execute.ActionResult
 
 	// Tracking fix phase
-	trackingFixItems   []trackingFixItem
-	trackingFixCursor  int
-	trackingFixResults []execute.ActionResult
+	trackingFixItems  []trackingFixItem
+	trackingFixCursor int
 
 	// Prune
 	orphans      []*prune.OrphanRepo
@@ -637,7 +631,6 @@ func (m SyncModel) finishExecution() (tea.Model, tea.Cmd) {
 
 		m.phase = syncPhaseTrackingFix
 		m.trackingFixCursor = 0
-		m.trackingFixResults = nil
 		return m, nil
 	}
 
@@ -750,19 +743,6 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.finishExecution()
 		}
 		return m, m.waitForActionResult()
-
-	case trackingFixResultMsg:
-		m.trackingFixResults = append(m.trackingFixResults, msg.result)
-		if msg.result.Success {
-			m.succeeded = append(m.succeeded, msg.result)
-		} else {
-			m.failed = append(m.failed, msg.result)
-		}
-		m.trackingFixCursor++
-		if m.trackingFixCursor >= len(m.trackingFixItems) {
-			return m.enterPruneOrSummary()
-		}
-		return m, nil
 	}
 
 	return m, nil
@@ -894,6 +874,11 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				result = execute.SetUpstreamAndPull(item.Path, item.RemoteName, item.Branch, m.auth)
 			}
 			result.Description = item.Description
+			if err := m.completeAction(result); err != nil {
+				m.loadErr = err
+				m.phase = syncPhaseSummary
+				return m, tea.Quit
+			}
 			if result.Success {
 				m.succeeded = append(m.succeeded, result)
 			} else {
@@ -1263,13 +1248,6 @@ func (m SyncModel) renderTrackingFix() string {
 	item := m.trackingFixItems[m.trackingFixCursor]
 	current := m.trackingFixCursor + 1
 	total := len(m.trackingFixItems)
-
-	// Show results of previous fixes
-	var prevResults strings.Builder
-	for _, r := range m.trackingFixResults {
-		prevResults.WriteString(formatActionResult(r))
-		prevResults.WriteString("\n")
-	}
 
 	var problem, question, command string
 	switch item.Action {
