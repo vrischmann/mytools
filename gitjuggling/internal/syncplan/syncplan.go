@@ -38,6 +38,8 @@ type Action struct {
 	// Merged records whether the commit was merged into the tracking
 	// remote's default branch when the plan was built.
 	Merged bool
+	// Set after sync removes the worktree and before trying branch deletion.
+	BranchCleanupPending bool `json:",omitempty"`
 }
 
 // MovedPath returns the new location of a path carried along by a directory move.

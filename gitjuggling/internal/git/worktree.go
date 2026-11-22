@@ -18,10 +18,15 @@ type Upstream struct {
 // WorktreeState records the checkout and tracking information that a prune
 // was approved for. The registration ID survives moves of the main clone.
 type WorktreeState struct {
-	Branch     string
-	Commit     string   `json:",omitempty"`
-	Upstream   Upstream `json:",omitzero"`
-	WorktreeID string   `json:",omitempty"`
+	BranchState
+	WorktreeID string `json:",omitempty"`
+}
+
+// BranchState identifies the local tip and the remote ref it tracks.
+type BranchState struct {
+	Branch   string
+	Commit   string   `json:",omitempty"`
+	Upstream Upstream `json:",omitzero"`
 	// Bind the plan to the same fetch URL without persisting credentials.
 	RemoteURLHash string `json:",omitempty"`
 }
@@ -38,33 +43,47 @@ func ReadWorktreeState(mainPath, worktreePath string) (WorktreeState, error) {
 	if err != nil {
 		return WorktreeState{}, err
 	}
-	ref := "refs/heads/" + branch
-	cmd := exec.Command("git", "for-each-ref",
-		"--format=%(refname)%00%(objectname)%00%(upstream:remotename)%00%(upstream:remoteref)", "--", ref)
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
-	if err != nil {
-		return WorktreeState{}, fmt.Errorf("reading upstream of %s: %w", branch, err)
-	}
-	fields := strings.Split(strings.TrimSuffix(string(out), "\n"), "\x00")
-	if len(fields) != 4 || fields[0] != ref || fields[1] == "" || fields[2] == "" || fields[2] == "." {
-		return WorktreeState{}, fmt.Errorf("branch %s has no remote upstream", branch)
-	}
-	upstreamBranch, ok := strings.CutPrefix(fields[3], "refs/heads/")
-	if !ok || upstreamBranch == "" {
-		return WorktreeState{}, fmt.Errorf("upstream of %s is not a remote branch", branch)
-	}
-	url, err := RemoteURL(worktreePath, fields[2])
+	state, err := ReadBranchState(worktreePath, branch)
 	if err != nil {
 		return WorktreeState{}, err
 	}
-	return WorktreeState{
-		WorktreeID:    id,
-		Branch:        branch,
-		Commit:        fields[1],
-		Upstream:      Upstream{Remote: fields[2], Branch: upstreamBranch},
-		RemoteURLHash: fmt.Sprintf("%x", sha256.Sum256([]byte(url))),
-	}, nil
+	if state.Upstream.Remote == "" {
+		return WorktreeState{}, fmt.Errorf("branch %s has no remote upstream", branch)
+	}
+	return WorktreeState{BranchState: state, WorktreeID: id}, nil
+}
+
+// ReadBranchState reads a local branch independently of its checkout. It
+// leaves Upstream empty for branches without a remote tracking branch and
+// reports a missing local branch as os.ErrNotExist.
+func ReadBranchState(path, branch string) (BranchState, error) {
+	ref := "refs/heads/" + branch
+	cmd := exec.Command("git", "for-each-ref",
+		"--format=%(refname)%00%(objectname)%00%(upstream:remotename)%00%(upstream:remoteref)", "--", ref)
+	cmd.Dir = path
+	out, err := cmd.Output()
+	if err != nil {
+		return BranchState{}, fmt.Errorf("reading upstream of %s: %w", branch, err)
+	}
+	fields := strings.Split(strings.TrimSuffix(string(out), "\n"), "\x00")
+	if fields[0] != ref {
+		return BranchState{}, fmt.Errorf("local branch %s: %w", branch, os.ErrNotExist)
+	}
+	if len(fields) != 4 || fields[1] == "" {
+		return BranchState{}, fmt.Errorf("incomplete ref information for branch %s", branch)
+	}
+	state := BranchState{Branch: branch, Commit: fields[1]}
+	upstreamBranch, ok := strings.CutPrefix(fields[3], "refs/heads/")
+	if !ok || upstreamBranch == "" || fields[2] == "" || fields[2] == "." {
+		return state, nil
+	}
+	url, err := RemoteURL(path, fields[2])
+	if err != nil {
+		return BranchState{}, err
+	}
+	state.Upstream = Upstream{Remote: fields[2], Branch: upstreamBranch}
+	state.RemoteURLHash = fmt.Sprintf("%x", sha256.Sum256([]byte(url)))
+	return state, nil
 }
 
 func worktreeID(mainPath, worktreePath string) (string, error) {

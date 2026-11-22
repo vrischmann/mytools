@@ -150,11 +150,12 @@ type SyncModel struct {
 	localDirty          map[string]bool
 
 	// Execution phase
-	completed   int
-	total       int
-	execCh      <-chan execute.ActionResult
-	execResults []execute.ActionResult
-	execLog     []string
+	completed      int
+	total          int
+	execCh         <-chan execute.ActionResult
+	branchCleanups []syncplan.Action
+	execResults    []execute.ActionResult
+	execLog        []string
 
 	// Summary phase
 	succeeded []execute.ActionResult
@@ -398,12 +399,19 @@ func (m *SyncModel) setPlan(actions []syncplan.Action) {
 	m.viewport.SetContent(m.buildPlanContent())
 }
 
-// completeAction removes a successful action from the durable plan.
+// completeAction saves any remaining branch cleanup or retires a finished action.
 func (m *SyncModel) completeAction(result execute.ActionResult) error {
 	if !result.Success || m.dryRun {
 		return nil
 	}
 	for i, action := range m.actions {
+		if next := result.BranchCleanup; next != nil {
+			if action.Type == syncplan.ActionPruneWorktree && action.WorktreePath == result.Path {
+				m.actions[i] = *next
+				return m.plans.Save(syncstate.Plan{Actions: m.actions})
+			}
+			continue
+		}
 		if result.MovedFrom != "" && (action.Type != syncplan.ActionMove || action.CurrentPath != result.MovedFrom) {
 			continue
 		}
@@ -422,6 +430,9 @@ func (m *SyncModel) completeAction(result execute.ActionResult) error {
 		}
 		m.actions = append(m.actions[:i], m.actions[i+1:]...)
 		break
+	}
+	if result.BranchCleanup != nil {
+		return fmt.Errorf("could not find the pending worktree action for %s", result.Path)
 	}
 	if result.MovedFrom != "" {
 		syncplan.Relocate(m.actions, result.MovedFrom, result.Path)
@@ -728,19 +739,25 @@ func (m SyncModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Execution phase messages
 	case syncActionResultMsg:
-		m.completed++
-		m.execResults = append(m.execResults, msg.result)
-
-		m.execLog = append(m.execLog, formatActionResult(msg.result))
 		if err := m.completeAction(msg.result); err != nil {
 			m.loadErr = err
 			m.cancel()
 			m.phase = syncPhaseSummary
 			return m, tea.Quit
 		}
-
-		if m.completed >= m.total {
+		m.execLog = append(m.execLog, formatActionResult(msg.result))
+		if next := msg.result.BranchCleanup; next != nil {
+			m.branchCleanups = append(m.branchCleanups, *next)
+		} else {
+			m.completed++
+			m.execResults = append(m.execResults, msg.result)
+		}
+		if m.completed == m.total {
 			return m.finishExecution()
+		}
+		if m.completed+len(m.branchCleanups) == m.total {
+			m.execCh = execute.ExecuteActions(m.ctx, m.branchCleanups, false, nil, m.concurrency, m.auth)
+			m.branchCleanups = nil
 		}
 		return m, m.waitForActionResult()
 	}
@@ -1091,6 +1108,12 @@ func (m SyncModel) renderWorktreeConfirm() string {
 	current := m.worktreeConfirmCursor + 1
 	total := len(m.worktreeConfirmIndices)
 
+	if action.BranchCleanupPending {
+		return fmt.Sprintf("%s\n\n  The worktree was removed. Retry deletion of merged branch %s in %s?\n\n  %s\n",
+			SectionHeader(fmt.Sprintf("Branch cleanup %d/%d", current, total)),
+			SuccessStyle.Render(action.Branch), DimStyle.Render(action.MainRepoPath),
+			DimStyle.Render("[y] Delete branch  [n] Skip  [a] Approve all remaining  [q] Cancel"))
+	}
 	upstream := action.Upstream.Remote + "/" + action.Upstream.Branch
 	fate := fmt.Sprintf("Branch %s tracks %s, which no longer exists.", SuccessStyle.Render(action.Branch), upstream)
 	command := fmt.Sprintf("git worktree remove %s", action.WorktreePath)
@@ -1164,7 +1187,7 @@ func (m SyncModel) buildPlanContent() string {
 		}
 		sb.WriteString(fmt.Sprintf("%s %s",
 			WarnStyle.Render(fmt.Sprintf("%d", m.worktreePrunes)),
-			LabelStyle.Render("stale worktrees"),
+			LabelStyle.Render("worktree cleanup actions"),
 		))
 	}
 	sb.WriteString("\n")
@@ -1191,7 +1214,9 @@ func (m SyncModel) buildPlanContent() string {
 		for _, a := range m.actions {
 			if a.Type == syncplan.ActionPruneWorktree {
 				summary := fmt.Sprintf("remove %s + branch %s", DimStyle.Render(a.WorktreePath), DimStyle.Render(a.Branch))
-				if !a.Merged {
+				if a.BranchCleanupPending {
+					summary = fmt.Sprintf("retry removal of merged branch %s in %s", a.Branch, DimStyle.Render(a.MainRepoPath))
+				} else if !a.Merged {
 					summary = fmt.Sprintf("remove %s (branch %s kept)", DimStyle.Render(a.WorktreePath), DimStyle.Render(a.Branch))
 				}
 				sb.WriteString(fmt.Sprintf("    %s %s/%s (%s)  %s\n",

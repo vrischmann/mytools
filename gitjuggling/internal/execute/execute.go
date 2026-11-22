@@ -23,6 +23,8 @@ type ActionResult struct {
 	MovedFrom   string // previous path of a completed move
 	Success     bool
 	Message     string
+	// BranchCleanup is the remaining action to save before deleting a branch.
+	BranchCleanup *syncplan.Action
 }
 
 // IsNoTrackingError returns true if the error message indicates a missing
@@ -61,17 +63,21 @@ func IsBranchMerged(localPath, branch, base string) (bool, error) {
 
 // RemoveWorktreeAndBranch checks that the planned checkout still has the
 // same missing upstream before removing it. Git also refuses dirty or locked
-// worktrees. A saved plan from before these checks needs to be rebuilt.
+// worktrees. A merged branch is returned as a separate cleanup step so
+// callers can save it before attempting deletion.
 func RemoveWorktreeAndBranch(action syncplan.Action, auth git.GitHubAuth) ActionResult {
 	path := action.WorktreePath
 	result := ActionResult{Description: filepath.Base(filepath.Dir(path)) + "/" + filepath.Base(path), Path: path}
-	if action.Repo == nil || action.WorktreeID == "" || action.Upstream.Remote == "" {
+	if action.Repo == nil || action.WorktreeID == "" || action.Upstream.Remote == "" || action.Commit == "" || action.RemoteURLHash == "" {
 		result.Message = "rebuild the sync plan to record the worktree details"
 		return result
 	}
 	if err := verifyMainClone(action.MainRepoPath, action.Repo.CloneURL); err != nil {
 		result.Message = err.Error()
 		return result
+	}
+	if action.BranchCleanupPending {
+		return cleanupWorktreeBranch(action, auth, result)
 	}
 	// If removal finished before the plan could be saved, retire the action.
 	// An offline checkout still has a registration and must be left pending.
@@ -116,21 +122,68 @@ func RemoveWorktreeAndBranch(action syncplan.Action, auth git.GitHubAuth) Action
 		return result
 	}
 
-	if !action.Merged || !git.IsAncestor(action.MainRepoPath, "refs/heads/"+action.Branch, status.DefaultTip) {
+	if !action.Merged || !git.IsAncestor(action.MainRepoPath, action.Commit, status.DefaultTip) {
 		result.Success = true
 		result.Message = fmt.Sprintf("removed stale worktree (kept branch %s because its merge could not be confirmed)", action.Branch)
 		return result
 	}
 
+	action.BranchCleanupPending = true
+	result.BranchCleanup = &action
+	result.Success = true
+	result.Message = "removed stale worktree"
+	return result
+}
+
+func cleanupWorktreeBranch(action syncplan.Action, auth git.GitHubAuth, result ActionResult) ActionResult {
+	// The branch can be repurposed between runs or while contacting the
+	// remote. Compare its tip, tracking ref and fetch URL before deletion.
+	stillPlanned := func() bool {
+		current, err := git.ReadBranchState(action.MainRepoPath, action.Branch)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			result.Success = true
+			result.Message = fmt.Sprintf("branch %s already removed", action.Branch)
+		case err != nil:
+			result.Message = fmt.Sprintf("could not verify branch %s: %v", action.Branch, err)
+		case !action.Merged || current != action.BranchState:
+			result.Success = true
+			result.Message = fmt.Sprintf("kept branch %s because it no longer matches the plan", action.Branch)
+		default:
+			return true
+		}
+		return false
+	}
+	if !stillPlanned() {
+		return result
+	}
+	status, err := auth.LookupRemoteBranch(action.MainRepoPath, action.Upstream.Remote, action.Upstream.Branch)
+	if err != nil {
+		result.Message = fmt.Sprintf("could not check upstream %s/%s: %v", action.Upstream.Remote, action.Upstream.Branch, err)
+		return result
+	}
+	if status.Exists {
+		result.Success = true
+		result.Message = fmt.Sprintf("kept branch %s because its upstream exists again", action.Branch)
+		return result
+	}
+	if !git.IsAncestor(action.MainRepoPath, action.Commit, status.DefaultTip) {
+		result.Success = true
+		result.Message = fmt.Sprintf("kept branch %s because its merge could not be confirmed", action.Branch)
+		return result
+	}
+	if !stillPlanned() {
+		return result
+	}
 	deleteCmd := exec.Command("git", "branch", "-d", "--", action.Branch)
 	deleteCmd.Dir = action.MainRepoPath
 	if output, err := deleteCmd.CombinedOutput(); err != nil {
-		result.Message = fmt.Sprintf("removed worktree, but git branch -d %s failed: %s", action.Branch, strings.TrimSpace(string(output)))
+		result.Message = fmt.Sprintf("git branch -d %s failed: %s", action.Branch, strings.TrimSpace(string(output)))
 		return result
 	}
 
 	result.Success = true
-	result.Message = fmt.Sprintf("removed stale worktree and merged branch %s", action.Branch)
+	result.Message = fmt.Sprintf("removed merged branch %s", action.Branch)
 	return result
 }
 
@@ -375,7 +428,9 @@ func dryRunAction(action syncplan.Action) ActionResult {
 		}
 	case syncplan.ActionPruneWorktree:
 		message := fmt.Sprintf("would remove stale worktree and merged branch %s", action.Branch)
-		if !action.Merged {
+		if action.BranchCleanupPending {
+			message = fmt.Sprintf("would retry removal of merged branch %s", action.Branch)
+		} else if !action.Merged {
 			message = fmt.Sprintf("would remove stale worktree (branch %s kept — not fully merged)", action.Branch)
 		}
 		return ActionResult{

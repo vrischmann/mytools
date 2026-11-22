@@ -24,6 +24,8 @@ Flags:
 Sync saves unfinished actions for each workspace name, config file and workspace
 root. Resuming rechecks local changes before an interactive pull. With `--prune`,
 it also refreshes both remote inventories and scans the workspace for orphans.
+Sync also saves branch cleanup before attempting it. If Git refuses to delete
+a branch after removing its worktree, the next sync can retry that step.
 The first run after upgrading from a name-only plan builds a fresh plan and
 preserves the old file.
 

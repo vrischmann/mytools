@@ -368,7 +368,7 @@ func TestBuildExecutableActionsSkipsDeclinedWorktreePrunes(t *testing.T) {
 				Repo:          repo,
 				WorktreePath:  "/tmp/ppst-iter-seq",
 				MainRepoPath:  "/tmp/ppst",
-				WorktreeState: git.WorktreeState{Branch: "iter-seq"},
+				WorktreeState: git.WorktreeState{BranchState: git.BranchState{Branch: "iter-seq"}},
 			},
 		},
 		skippedWorktreePrunes: map[int]bool{1: true},
@@ -460,4 +460,57 @@ func TestTrackingRepairRetiresOnlySuccessfulUpdates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncPersistsAndRetriesOnlyBranchCleanup(t *testing.T) {
+	root := t.TempDir()
+	mainPath, worktree := filepath.Join(root, "repo"), filepath.Join(root, "checkout")
+	origin := gittest.BareRemote(t)
+	gittest.Repo(t, mainPath, origin)
+	gittest.Run(t, mainPath, "push", "-u", "origin", "master")
+	gittest.Worktree(t, mainPath, worktree, "topic", false)
+	gittest.Run(t, worktree, "push", "-u", "origin", "HEAD:refs/heads/published")
+	gittest.Run(t, origin, "update-ref", "-d", "refs/heads/published")
+	gittest.Run(t, mainPath, "fetch", "--prune", "origin")
+	state, err := git.ReadWorktreeState(mainPath, worktree)
+	require.NoError(t, err)
+	plan := &syncstate.Plan{Actions: []syncplan.Action{{
+		Type: syncplan.ActionPruneWorktree, Repo: &remote.RemoteRepo{Name: "repo", CloneURL: origin},
+		MainRepoPath: mainPath, WorktreePath: worktree, WorktreeState: state, Merged: true,
+	}}}
+	plans := testPlanStore(t, root)
+	require.NoError(t, plans.Save(*plan))
+	start := func(saved *syncstate.Plan) (tea.Model, tea.Cmd) {
+		m := NewSyncModel(plans, &config.Workspace{Root: root}, false, false, false, false, 1, saved)
+		t.Cleanup(m.cancel)
+		model, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	model, cmd := start(plan)
+	removed := cmd().(syncActionResultMsg)
+	require.True(t, removed.result.Success, removed.result.Message)
+	require.NotNil(t, removed.result.BranchCleanup)
+	require.NoDirExists(t, worktree)
+	// A replacement checkout makes Git refuse branch deletion.
+	gittest.Run(t, mainPath, "worktree", "add", worktree, "topic")
+	model, cmd = model.Update(removed)
+	saved, err := plans.Load()
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	require.Len(t, saved.Actions, 1)
+	require.True(t, saved.Actions[0].BranchCleanupPending)
+	model, _ = model.Update(cmd())
+	require.True(t, model.(SyncModel).HasFailures())
+	saved, err = plans.Load()
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	gittest.Run(t, worktree, "switch", "--detach")
+	model, cmd = start(saved)
+	model, _ = model.Update(cmd())
+	require.False(t, model.(SyncModel).HasFailures())
+	require.Equal(t, state.Commit, gittest.Run(t, worktree, "rev-parse", "HEAD"))
+	require.Empty(t, gittest.Run(t, mainPath, "branch", "--list", "topic"))
+	saved, err = plans.Load()
+	require.NoError(t, err)
+	require.Nil(t, saved)
 }

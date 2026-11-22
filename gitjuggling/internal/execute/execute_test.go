@@ -174,6 +174,10 @@ func TestRemoveWorktreeAndBranchMergedDeletesBranch(t *testing.T) {
 	result := RemoveWorktreeAndBranch(action, git.GitHubAuth{})
 	require.True(t, result.Success, "result: %s", result.Message)
 	require.NoDirExists(t, wtPath)
+	require.NotNil(t, result.BranchCleanup)
+	require.Equal(t, action.Commit, gittest.Run(t, mainPath, "rev-parse", "refs/heads/feature"))
+	result = RemoveWorktreeAndBranch(*result.BranchCleanup, git.GitHubAuth{})
+	require.True(t, result.Success, result.Message)
 
 	out, err := exec.Command("git", "-C", mainPath, "branch", "--list", "feature").Output()
 	require.NoError(t, err)
@@ -265,7 +269,7 @@ func TestResumedPruneRevalidatesCheckout(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(a.WorktreePath, "work.txt"), []byte("unfinished"), 0o600))
 		}, "git worktree remove failed"},
 		{"legacy saved plan", func(_ *testing.T, a *syncplan.Action) {
-			a.WorktreeState = git.WorktreeState{Branch: a.Branch}
+			a.WorktreeState = git.WorktreeState{BranchState: git.BranchState{Branch: a.Branch}}
 		}, "rebuild"},
 	}
 	for _, tc := range tests {
@@ -306,4 +310,47 @@ func TestResumedPruneKeepsBranchAfterInterruptedRemoval(t *testing.T) {
 	result := RemoveWorktreeAndBranch(action, git.GitHubAuth{})
 	require.True(t, result.Success, result.Message)
 	require.Equal(t, action.Commit, gittest.Run(t, action.MainRepoPath, "rev-parse", "refs/heads/feature"))
+}
+
+func TestPendingBranchCleanupRevalidatesBeforeDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		change      func(*testing.T, syncplan.Action)
+		wantMessage string
+		branchGone  bool
+	}{
+		{"new tip", func(t *testing.T, a syncplan.Action) {
+			gittest.Run(t, a.MainRepoPath, "commit", "--allow-empty", "-m", "new work")
+			gittest.Run(t, a.MainRepoPath, "branch", "-f", a.Branch, "HEAD")
+			gittest.Run(t, a.MainRepoPath, "push", "origin", "master")
+		}, "no longer matches", false},
+		{"new tracking branch", func(t *testing.T, a syncplan.Action) {
+			gittest.Run(t, a.MainRepoPath, "config", "branch.feature.merge", "refs/heads/other")
+		}, "no longer matches", false},
+		{"tracking removed", func(t *testing.T, a syncplan.Action) {
+			gittest.Run(t, a.MainRepoPath, "branch", "--unset-upstream", a.Branch)
+		}, "no longer matches", false},
+		{"restored upstream", func(t *testing.T, a syncplan.Action) {
+			gittest.Run(t, a.MainRepoPath, "push", "origin", "HEAD:refs/heads/published")
+		}, "upstream exists", false},
+		{"changed default branch tip", func(t *testing.T, a syncplan.Action) {
+			tip := gittest.Run(t, a.MainRepoPath, "commit-tree", "HEAD^{tree}", "-m", "new root")
+			gittest.Run(t, a.MainRepoPath, "push", "--force", "origin", tip+":refs/heads/master")
+		}, "merge could not be confirmed", false},
+		{"already deleted", func(t *testing.T, a syncplan.Action) {
+			gittest.Run(t, a.MainRepoPath, "branch", "-d", a.Branch)
+		}, "already removed", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			a := planStaleWorktree(t, filepath.Join(root, "repo"), filepath.Join(root, "checkout"), false)
+			first := RemoveWorktreeAndBranch(a, git.GitHubAuth{})
+			require.NotNil(t, first.BranchCleanup, first.Message)
+			tc.change(t, a)
+			result := RemoveWorktreeAndBranch(*first.BranchCleanup, git.GitHubAuth{})
+			require.True(t, result.Success, result.Message)
+			require.Contains(t, result.Message, tc.wantMessage)
+			require.Equal(t, tc.branchGone, gittest.Run(t, a.MainRepoPath, "branch", "--list", a.Branch) == "")
+		})
+	}
 }
