@@ -27,3 +27,13 @@ func TestExecFindsSiblingRepositoriesWithTheSameNameAsSubmodules(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"project"}, paths)
 }
+
+func TestExecRejectsInvalidConcurrencyBeforeDiscovery(t *testing.T) {
+	t.Chdir(t.TempDir())
+	original := execConcurrency
+	t.Cleanup(func() { execConcurrency = original })
+	for _, concurrency := range []int{0, -1} {
+		execConcurrency = concurrency
+		require.ErrorContains(t, runExec(execCmd, []string{"status"}), "--concurrency must be at least 1")
+	}
+}

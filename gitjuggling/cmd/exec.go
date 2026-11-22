@@ -37,6 +37,10 @@ func init() {
 }
 
 func runExec(cmd *cobra.Command, args []string) error {
+	if execConcurrency < 1 {
+		return fmt.Errorf("--concurrency must be at least 1 (got %d)", execConcurrency)
+	}
+
 	// Discover repos first
 	repoPaths, err := getRepositoryPaths(execDepth)
 	if err != nil {
