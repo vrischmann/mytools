@@ -167,6 +167,23 @@ func TestResumeChecksSavedUpdatesForNewChanges(t *testing.T) {
 	require.Empty(t, gittest.Run(t, checkout, "stash", "list"))
 }
 
+func TestResumeKeepsSavedPlanWhenWorkspaceIsMissing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	plans := testPlanStore(t, root)
+	plan := syncstate.Plan{Actions: []syncplan.Action{{Type: syncplan.ActionClone, ExpectedPath: filepath.Join(root, "pending")}}}
+	require.NoError(t, plans.Save(plan))
+	m := NewSyncModel(plans, &config.Workspace{Root: root}, false, true, false, false, 1, &plan)
+	defer m.cancel()
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	resumed := model.(SyncModel)
+	require.True(t, resumed.HasFailures())
+	require.ErrorIs(t, resumed.loadErr, os.ErrNotExist)
+	require.NoDirExists(t, root)
+	saved, err := plans.Load()
+	require.NoError(t, err)
+	require.Equal(t, &plan, saved)
+}
+
 func TestResumeWithPruneKeepsSavedPlanWhenRefreshFails(t *testing.T) {
 	root := t.TempDir()
 	plans := testPlanStore(t, root)

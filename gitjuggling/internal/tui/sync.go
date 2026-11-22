@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"slices"
 	"strings"
 
@@ -773,6 +775,13 @@ func (m SyncModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.doPrune {
 				m.phase = syncPhaseLoading
 				return m, m.Init()
+			}
+			// A plain resume skips discovery. Make sure the workspace is
+			// still accessible before offering to execute saved clones.
+			if _, err := fs.ReadDir(os.DirFS(m.ws.Root), "."); err != nil {
+				m.loadErr = fmt.Errorf("reading workspace root %s: %w", m.ws.Root, err)
+				m.phase = syncPhaseSummary
+				return m, tea.Quit
 			}
 			m.setPlan(m.savedPlan.Actions)
 			m.savedPlan = nil

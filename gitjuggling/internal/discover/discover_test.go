@@ -64,6 +64,26 @@ func TestNormalizeIdempotent(t *testing.T) {
 	}
 }
 
+func TestDiscoverRequiresAnAccessibleRootDirectory(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+	local, err := Discover(missing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Nil(t, local)
+	file := filepath.Join(dir, "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	_, err = Discover(file)
+	require.ErrorContains(t, err, "not a directory")
+
+	alias := filepath.Join(t.TempDir(), "workspace")
+	require.NoError(t, os.Symlink(dir, alias))
+	gittest.Repo(t, filepath.Join(dir, "repo"), "https://example.test/owner/repo.git")
+	local, err = Discover(alias)
+	require.NoError(t, err)
+	_, found := local.FindByPath(filepath.Join(alias, "repo"))
+	require.True(t, found)
+}
+
 func TestDiscoverClassifiesWorktree(t *testing.T) {
 	require := require.New(t)
 	root := t.TempDir()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"iter"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -116,19 +117,24 @@ func (lr *LocalRepos) FindByPath(path string) (*LocalRepo, bool) {
 func Discover(root string) (*LocalRepos, error) {
 	var repos []LocalRepo
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(os.DirFS(root), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip errors, continue walking
+			if rel == "." {
+				return err
+			}
+			return nil // keep scanning accessible subdirectories
+		}
+		if rel == "." && !d.IsDir() {
+			return fmt.Errorf("workspace root is not a directory")
 		}
 
 		// We only care about entries named ".git" (directory or file)
-		base := filepath.Base(path)
-		if base != ".git" {
+		if d.Name() != ".git" {
 			return nil
 		}
 
 		// The repo path is the parent of .git
-		repoPath := filepath.Dir(path)
+		repoPath := filepath.Dir(filepath.Join(root, filepath.FromSlash(rel)))
 
 		var repo LocalRepo
 
